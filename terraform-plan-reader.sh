@@ -3,7 +3,45 @@
 # Terraform Plan Reader
 # Makes terraform plan output more human-readable
 
-INPUT_FILE="${1:-terraform_plan.txt}"
+# Default values
+INPUT_FILE="terraform_plan.txt"
+LIMIT=0  # 0 means no limit (show all)
+
+# Parse command-line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -l|--limit)
+            LIMIT="$2"
+            if ! [[ "$LIMIT" =~ ^[0-9]+$ ]]; then
+                echo "Error: Limit must be a positive number" >&2
+                exit 1
+            fi
+            shift 2
+            ;;
+        -h|--help)
+            echo "Usage: $0 [OPTIONS] [FILE]"
+            echo ""
+            echo "Options:"
+            echo "  -l, --limit N    Limit output to N items per section (default: show all)"
+            echo "  -h, --help       Show this help message"
+            echo ""
+            echo "Examples:"
+            echo "  $0 terraform_plan.txt"
+            echo "  $0 --limit 20 terraform_plan.txt"
+            echo "  $0 -l 50"
+            exit 0
+            ;;
+        -*)
+            echo "Error: Unknown option $1" >&2
+            echo "Use --help for usage information" >&2
+            exit 1
+            ;;
+        *)
+            INPUT_FILE="$1"
+            shift
+            ;;
+    esac
+done
 
 if [ ! -f "$INPUT_FILE" ]; then
     echo "Error: File '$INPUT_FILE' not found" >&2
@@ -60,72 +98,99 @@ echo ""
 echo -e "${BOLD}${CYAN}═══════════════════════════════════════════════════════════════${NC}"
 echo ""
 
+# Helper function to apply limit if set
+apply_limit() {
+    if [ "$LIMIT" -gt 0 ]; then
+        head -n "$LIMIT"
+    else
+        cat
+    fi
+}
+
 # Extract resource names - look for lines with "# resource_name" will be created/destroyed/modified
 echo -e "${BOLD}${GREEN}RESOURCES TO BE CREATED:${NC}"
 echo ""
-grep "will be created" "$INPUT_FILE" | \
+CREATED_RESOURCES=$(grep "will be created" "$INPUT_FILE" | \
     clean_line | \
     sed -E 's/^[[:space:]]*#[[:space:]]*//' | \
     sed -E 's/[[:space:]]*will be created.*$//' | \
-    sort -u | \
-    head -30 | \
-    sed 's/^/  /'
-
-if [ "$ADD_COUNT" -gt 30 ]; then
-    echo -e "${CYAN}  ... and $((ADD_COUNT - 30)) more${NC}"
+    sort -u)
+if [ -n "$CREATED_RESOURCES" ]; then
+    CREATED_COUNT=$(echo "$CREATED_RESOURCES" | grep -v '^$' | wc -l | tr -d ' ')
+    DISPLAYED=$(echo "$CREATED_RESOURCES" | apply_limit | sed 's/^/  /')
+    echo "$DISPLAYED"
+    if [ "$LIMIT" -gt 0 ] && [ "$CREATED_COUNT" -gt "$LIMIT" ]; then
+        REMAINING=$((CREATED_COUNT - LIMIT))
+        echo -e "${CYAN}  ... and $REMAINING more${NC}"
+    fi
+else
+    echo "  (none)"
 fi
 
 echo ""
 echo -e "${BOLD}${YELLOW}RESOURCES TO BE MODIFIED/CHANGED:${NC}"
 echo ""
-(grep -E "will be updated|must be replaced|will be replaced" "$INPUT_FILE" | \
+CHANGED_RESOURCES=$(grep -E "will be updated|must be replaced|will be replaced" "$INPUT_FILE" | \
     clean_line | \
     sed -E 's/^[[:space:]]*#[[:space:]]*//' | \
     sed -E 's/[[:space:]]*(will be|must be).*$//' | \
-    sort -u | \
-    head -30 | \
-    sed 's/^/  /') || echo "  (none)"
-
-if [ "$CHANGE_COUNT" -gt 30 ]; then
-    echo -e "${CYAN}  ... and $((CHANGE_COUNT - 30)) more${NC}"
+    sort -u)
+if [ -n "$CHANGED_RESOURCES" ]; then
+    CHANGED_COUNT=$(echo "$CHANGED_RESOURCES" | grep -v '^$' | wc -l | tr -d ' ')
+    DISPLAYED=$(echo "$CHANGED_RESOURCES" | apply_limit | sed 's/^/  /')
+    echo "$DISPLAYED"
+    if [ "$LIMIT" -gt 0 ] && [ "$CHANGED_COUNT" -gt "$LIMIT" ]; then
+        REMAINING=$((CHANGED_COUNT - LIMIT))
+        echo -e "${CYAN}  ... and $REMAINING more${NC}"
+    fi
+else
+    echo "  (none)"
 fi
 
 echo ""
 echo -e "${BOLD}${RED}RESOURCES TO BE DESTROYED:${NC}"
 echo ""
-grep -E "will be.*destroyed|\[31mdestroyed" "$INPUT_FILE" | \
+DESTROYED_RESOURCES=$(grep -E "will be.*destroyed|\[31mdestroyed" "$INPUT_FILE" | \
     clean_line | \
     sed -E 's/^[[:space:]]*#[[:space:]]*//' | \
     sed -E 's/[[:space:]]*will be.*destroyed.*$//' | \
     sed -E 's/[[:space:]]*\(because.*$//' | \
-    sort -u | \
-    head -30 | \
-    sed 's/^/  /'
-
-if [ "$DESTROY_COUNT" -gt 30 ]; then
-    echo -e "${CYAN}  ... and $((DESTROY_COUNT - 30)) more${NC}"
+    sort -u)
+if [ -n "$DESTROYED_RESOURCES" ]; then
+    DESTROYED_COUNT=$(echo "$DESTROYED_RESOURCES" | grep -v '^$' | wc -l | tr -d ' ')
+    DISPLAYED=$(echo "$DESTROYED_RESOURCES" | apply_limit | sed 's/^/  /')
+    echo "$DISPLAYED"
+    if [ "$LIMIT" -gt 0 ] && [ "$DESTROYED_COUNT" -gt "$LIMIT" ]; then
+        REMAINING=$((DESTROYED_COUNT - LIMIT))
+        echo -e "${CYAN}  ... and $REMAINING more${NC}"
+    fi
+else
+    echo "  (none)"
 fi
 
 if [ "$MOVE_COUNT" -gt 0 ]; then
     echo ""
     echo -e "${BOLD}${BLUE}RESOURCES TO BE MOVED:${NC}"
     echo ""
-    grep "has moved to" "$INPUT_FILE" | \
+    MOVED_RESOURCES=$(grep "has moved to" "$INPUT_FILE" | \
         clean_line | \
         sed -E 's/^[[:space:]]*#[[:space:]]*//' | \
         sed -E 's/[[:space:]]*has moved to.*$//' | \
-        sort -u | \
-        head -20 | \
-        sed 's/^/  /'
-    
-    if [ "$MOVE_COUNT" -gt 20 ]; then
-        echo -e "${CYAN}  ... and $((MOVE_COUNT - 20)) more${NC}"
+        sort -u)
+    if [ -n "$MOVED_RESOURCES" ]; then
+        MOVED_DISPLAY_COUNT=$(echo "$MOVED_RESOURCES" | grep -v '^$' | wc -l | tr -d ' ')
+        DISPLAYED=$(echo "$MOVED_RESOURCES" | apply_limit | sed 's/^/  /')
+        echo "$DISPLAYED"
+        if [ "$LIMIT" -gt 0 ] && [ "$MOVED_DISPLAY_COUNT" -gt "$LIMIT" ]; then
+            REMAINING=$((MOVED_DISPLAY_COUNT - LIMIT))
+            echo -e "${CYAN}  ... and $REMAINING more${NC}"
+        fi
+    else
+        echo "  (none)"
     fi
 fi
 
 echo ""
 echo -e "${BOLD}${CYAN}═══════════════════════════════════════════════════════════════${NC}"
-echo ""
-echo -e "${BOLD}Note:${NC} This is a summary view. For full details, review the original plan file."
 echo ""
 
