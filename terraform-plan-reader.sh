@@ -248,9 +248,9 @@ if [ "$GROUP_BY_MODULE" = true ]; then
     echo -e "${BOLD}${CYAN}RESOURCES GROUPED BY MODULE:${NC}"
     echo ""
     
-    # Collect all unique modules
+    # Collect all unique top-level modules only
     # Pattern: module.MODULENAME[0] or module.MODULENAME
-    # Extract module name up to the first dot after [0] or first dot after module name
+    # Extract only the first module in the path (top-level), ignore nested modules
     ALL_MODULES=$(printf "%s\n%s\n%s\n%s\n" \
         "$CREATED_RESOURCES" \
         "$CHANGED_RESOURCES" \
@@ -258,6 +258,7 @@ if [ "$GROUP_BY_MODULE" = true ]; then
         "$MOVED_RESOURCES" | \
         grep -v '^$' | \
         sed -E 's/^(module\.[a-zA-Z0-9_]+)(\[[0-9]+\])?(\..*)?$/\1\2/' | \
+        grep -E '^module\.[a-zA-Z0-9_]+(\[[0-9]+\])?$' | \
         sort -u)
     
     MODULE_COUNT=$(echo "$ALL_MODULES" | grep -v '^$' | wc -l | tr -d ' ')
