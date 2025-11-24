@@ -6,6 +6,7 @@
 # Default values
 INPUT_FILE="terraform_plan.txt"
 LIMIT=0  # 0 means no limit (show all)
+GROUP_BY_MODULE=false
 
 # Parse command-line arguments
 while [[ $# -gt 0 ]]; do
@@ -18,17 +19,23 @@ while [[ $# -gt 0 ]]; do
             fi
             shift 2
             ;;
+        -g|--group-by-module)
+            GROUP_BY_MODULE=true
+            shift
+            ;;
         -h|--help)
             echo "Usage: $0 [OPTIONS] [FILE]"
             echo ""
             echo "Options:"
-            echo "  -l, --limit N    Limit output to N items per section (default: show all)"
-            echo "  -h, --help       Show this help message"
+            echo "  -l, --limit N         Limit output to N items per section (default: show all)"
+            echo "  -g, --group-by-module Show resources grouped by module with action summary"
+            echo "  -h, --help            Show this help message"
             echo ""
             echo "Examples:"
             echo "  $0 terraform_plan.txt"
             echo "  $0 --limit 20 terraform_plan.txt"
-            echo "  $0 -l 50"
+            echo "  $0 --group-by-module terraform_plan.txt"
+            echo "  $0 -l 50 -g"
             exit 0
             ;;
         -*)
@@ -233,6 +240,80 @@ if [ -n "$ALL_RESOURCES" ]; then
     fi
 else
     echo "  (none)"
+fi
+
+# Group by module if requested
+if [ "$GROUP_BY_MODULE" = true ]; then
+    echo ""
+    echo -e "${BOLD}${CYAN}RESOURCES GROUPED BY MODULE:${NC}"
+    echo ""
+    
+    # Collect all unique modules
+    # Pattern: module.MODULENAME[0] or module.MODULENAME
+    # Extract module name up to the first dot after [0] or first dot after module name
+    ALL_MODULES=$(printf "%s\n%s\n%s\n%s\n" \
+        "$CREATED_RESOURCES" \
+        "$CHANGED_RESOURCES" \
+        "$DESTROYED_RESOURCES" \
+        "$MOVED_RESOURCES" | \
+        grep -v '^$' | \
+        sed -E 's/^(module\.[a-zA-Z0-9_]+)(\[[0-9]+\])?(\..*)?$/\1\2/' | \
+        sort -u)
+    
+    MODULE_COUNT=$(echo "$ALL_MODULES" | grep -v '^$' | wc -l | tr -d ' ')
+    
+    echo -e "${BOLD}Total modules touched:${NC} $MODULE_COUNT"
+    echo ""
+    
+    # Display each module with its actions
+    # Use here-string to avoid subshell issues
+    while IFS= read -r module || [ -n "$module" ]; do
+        if [ -z "$module" ]; then
+            continue
+        fi
+        
+        # Count actions for this module using grep
+        # Escape brackets in module name for grep
+        module_escaped=$(echo "$module" | sed 's/\[/\\[/g; s/\]/\\]/g')
+        created_count=$(echo "$CREATED_RESOURCES" | grep "^${module_escaped}\." 2>/dev/null | wc -l | tr -d ' ')
+        changed_count=$(echo "$CHANGED_RESOURCES" | grep "^${module_escaped}\." 2>/dev/null | wc -l | tr -d ' ')
+        destroyed_count=$(echo "$DESTROYED_RESOURCES" | grep "^${module_escaped}\." 2>/dev/null | wc -l | tr -d ' ')
+        moved_count=0
+        if [ -n "$MOVED_RESOURCES" ]; then
+            moved_count=$(echo "$MOVED_RESOURCES" | grep "^${module_escaped}\." 2>/dev/null | wc -l | tr -d ' ')
+        fi
+        
+        # Build action summary string
+        action_summary=""
+        if [ "$created_count" -gt 0 ]; then
+            action_summary="${GREEN}${created_count} added${NC}"
+        fi
+        if [ "$changed_count" -gt 0 ]; then
+            if [ -n "$action_summary" ]; then
+                action_summary="${action_summary}, ${YELLOW}${changed_count} changed${NC}"
+            else
+                action_summary="${YELLOW}${changed_count} changed${NC}"
+            fi
+        fi
+        if [ "$destroyed_count" -gt 0 ]; then
+            if [ -n "$action_summary" ]; then
+                action_summary="${action_summary}, ${RED}${destroyed_count} destroyed${NC}"
+            else
+                action_summary="${RED}${destroyed_count} destroyed${NC}"
+            fi
+        fi
+        if [ "$moved_count" -gt 0 ]; then
+            if [ -n "$action_summary" ]; then
+                action_summary="${action_summary}, ${BLUE}${moved_count} moved${NC}"
+            else
+                action_summary="${BLUE}${moved_count} moved${NC}"
+            fi
+        fi
+        
+        if [ -n "$action_summary" ]; then
+            echo -e "  ${BOLD}${module}${NC}: $action_summary"
+        fi
+    done <<< "$ALL_MODULES"
 fi
 
 echo ""
