@@ -85,8 +85,16 @@ else
     DESTROY_COUNT=0
 fi
 
-# Count moves
+# Count moves and extract moved resources
+MOVED_RESOURCES=""
 MOVE_COUNT=$(grep -c "has moved to" "$INPUT_FILE" 2>/dev/null || echo "0")
+if [ "$MOVE_COUNT" -gt 0 ]; then
+    MOVED_RESOURCES=$(grep "has moved to" "$INPUT_FILE" | \
+        clean_line | \
+        sed -E 's/^[[:space:]]*#[[:space:]]*//' | \
+        sed -E 's/[[:space:]]*has moved to.*$//' | \
+        sort -u)
+fi
 
 echo -e "${GREEN}Resources to add:${NC}    $ADD_COUNT"
 echo -e "${YELLOW}Resources to change:${NC}  $CHANGE_COUNT"
@@ -172,11 +180,6 @@ if [ "$MOVE_COUNT" -gt 0 ]; then
     echo ""
     echo -e "${BOLD}${BLUE}RESOURCES TO BE MOVED:${NC}"
     echo ""
-    MOVED_RESOURCES=$(grep "has moved to" "$INPUT_FILE" | \
-        clean_line | \
-        sed -E 's/^[[:space:]]*#[[:space:]]*//' | \
-        sed -E 's/[[:space:]]*has moved to.*$//' | \
-        sort -u)
     if [ -n "$MOVED_RESOURCES" ]; then
         MOVED_DISPLAY_COUNT=$(echo "$MOVED_RESOURCES" | grep -v '^$' | wc -l | tr -d ' ')
         DISPLAYED=$(echo "$MOVED_RESOURCES" | apply_limit | sed 's/^/  /')
@@ -188,6 +191,29 @@ if [ "$MOVE_COUNT" -gt 0 ]; then
     else
         echo "  (none)"
     fi
+fi
+
+# Combine all resources and sort alphabetically
+echo ""
+echo -e "${BOLD}${CYAN}ALL RESOURCES (ALPHABETICALLY SORTED):${NC}"
+echo ""
+ALL_RESOURCES=$(printf "%s\n%s\n%s\n%s\n" \
+    "$CREATED_RESOURCES" \
+    "$CHANGED_RESOURCES" \
+    "$DESTROYED_RESOURCES" \
+    "$MOVED_RESOURCES" | \
+    grep -v '^$' | \
+    sort -u)
+if [ -n "$ALL_RESOURCES" ]; then
+    ALL_COUNT=$(echo "$ALL_RESOURCES" | grep -v '^$' | wc -l | tr -d ' ')
+    DISPLAYED=$(echo "$ALL_RESOURCES" | apply_limit | sed 's/^/  /')
+    echo "$DISPLAYED"
+    if [ "$LIMIT" -gt 0 ] && [ "$ALL_COUNT" -gt "$LIMIT" ]; then
+        REMAINING=$((ALL_COUNT - LIMIT))
+        echo -e "${CYAN}  ... and $REMAINING more${NC}"
+    fi
+else
+    echo "  (none)"
 fi
 
 echo ""
