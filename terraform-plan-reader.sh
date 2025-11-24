@@ -193,7 +193,7 @@ if [ "$MOVE_COUNT" -gt 0 ]; then
     fi
 fi
 
-# Combine all resources and sort alphabetically
+# Combine all resources and sort alphabetically with color coding
 echo ""
 echo -e "${BOLD}${CYAN}ALL RESOURCES (ALPHABETICALLY SORTED):${NC}"
 echo ""
@@ -206,8 +206,27 @@ ALL_RESOURCES=$(printf "%s\n%s\n%s\n%s\n" \
     sort -u)
 if [ -n "$ALL_RESOURCES" ]; then
     ALL_COUNT=$(echo "$ALL_RESOURCES" | grep -v '^$' | wc -l | tr -d ' ')
-    DISPLAYED=$(echo "$ALL_RESOURCES" | apply_limit | sed 's/^/  /')
-    echo "$DISPLAYED"
+    
+    # Color-code each resource based on its category
+    echo "$ALL_RESOURCES" | apply_limit | while IFS= read -r resource; do
+        if [ -z "$resource" ]; then
+            continue
+        fi
+        
+        # Determine color based on which list the resource belongs to
+        COLOR="${NC}"  # Default: no color
+        if echo "$CREATED_RESOURCES" | grep -Fxq "$resource"; then
+            COLOR="${GREEN}"
+        elif echo "$CHANGED_RESOURCES" | grep -Fxq "$resource"; then
+            COLOR="${YELLOW}"
+        elif echo "$DESTROYED_RESOURCES" | grep -Fxq "$resource"; then
+            COLOR="${RED}"
+        elif [ -n "$MOVED_RESOURCES" ] && echo "$MOVED_RESOURCES" | grep -Fxq "$resource"; then
+            COLOR="${BLUE}"
+        fi
+        
+        echo -e "${COLOR}  ${resource}${NC}"
+    done
     if [ "$LIMIT" -gt 0 ] && [ "$ALL_COUNT" -gt "$LIMIT" ]; then
         REMAINING=$((ALL_COUNT - LIMIT))
         echo -e "${CYAN}  ... and $REMAINING more${NC}"
