@@ -1,0 +1,41 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Validate script
+        run: |
+          bash -n terraform-plan-reader.sh
+          echo "✓ Syntax check passed"
+      
+      - name: Run ShellCheck
+        uses: koalaman/shellcheck-action@v0.9.0
+        with:
+          files: terraform-plan-reader.sh
+          severity: error
+          format: gcc
+      
+      - name: Make script executable
+        run: chmod +x terraform-plan-reader.sh
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: terraform-plan-reader.sh
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

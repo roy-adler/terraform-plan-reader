@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  validate:
+    name: Validate Script
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Check syntax
+        run: |
+          bash -n terraform-plan-reader.sh
+          echo "✓ Syntax check passed"
+      
+      - name: Run ShellCheck
+        uses: koalaman/shellcheck-action@v0.9.0
+        with:
+          files: terraform-plan-reader.sh
+          severity: error
+          format: gcc
+
