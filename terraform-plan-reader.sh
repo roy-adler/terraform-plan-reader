@@ -113,6 +113,11 @@ fi
 
 echo -e "${GREEN}Resources to add:${NC}    $ADD_COUNT"
 echo -e "${YELLOW}Resources to change:${NC}  $CHANGE_COUNT"
+# Count replaced resources for summary
+REPLACED_COUNT_SUMMARY=$(grep -cE "must be.*replaced|will be.*replaced" "$INPUT_FILE" 2>/dev/null || echo "0")
+if [ "$REPLACED_COUNT_SUMMARY" -gt 0 ]; then
+    echo -e "${PINK}Resources to replace:${NC} $REPLACED_COUNT_SUMMARY"
+fi
 echo -e "${RED}Resources to destroy:${NC} $DESTROY_COUNT"
 if [ "$MOVE_COUNT" -gt 0 ]; then
     echo -e "${BLUE}Resources to move:${NC}    $MOVE_COUNT"
