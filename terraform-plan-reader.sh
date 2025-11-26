@@ -33,15 +33,15 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  -l, --limit N         Limit output to N items per section (default: show all)"
-            echo "  -g, --group-by-module Show resources grouped by module with action summary"
-            echo "  -d, --detail          Group modules with identical action patterns (use with -g)"
+            echo "  -g, --group-by-module Group modules with identical action patterns"
+            echo "  -d, --detail          Show detailed changes for each module (use with -g)"
             echo "  -h, --help            Show this help message"
             echo ""
             echo "Examples:"
             echo "  $0 terraform_plan.txt"
             echo "  $0 --limit 20 terraform_plan.txt"
-            echo "  $0 --group-by-module terraform_plan.txt"
-            echo "  $0 -g -d terraform_plan.txt  # Group modules with same actions"
+            echo "  $0 --group-by-module terraform_plan.txt  # Group modules with same actions"
+            echo "  $0 -g -d terraform_plan.txt  # Group and show detailed changes"
             echo "  $0 -l 50 -g"
             exit 0
             ;;
@@ -324,69 +324,219 @@ if [ "$GROUP_BY_MODULE" = true ]; then
             fi
         fi
         
-        # Store in temp file: pattern|module|action_summary
-        echo "${action_pattern}|${module}|${action_summary}" >> "$TEMP_FILE"
+        # Get actual resources for this module
+        module_created_resources=$(echo "$CREATED_RESOURCES" | grep "^${module_escaped}\." 2>/dev/null | tr '\n' ';')
+        module_changed_resources=$(echo "$CHANGED_RESOURCES" | grep "^${module_escaped}\." 2>/dev/null | tr '\n' ';')
+        module_destroyed_resources=$(echo "$DESTROYED_RESOURCES" | grep "^${module_escaped}\." 2>/dev/null | tr '\n' ';')
+        module_moved_resources=""
+        if [ -n "$MOVED_RESOURCES" ]; then
+            module_moved_resources=$(echo "$MOVED_RESOURCES" | grep "^${module_escaped}\." 2>/dev/null | tr '\n' ';')
+        fi
+        
+        # Store in temp file: pattern|module|action_summary|created|changed|destroyed|moved
+        echo "${action_pattern}|${module}|${action_summary}|${module_created_resources}|${module_changed_resources}|${module_destroyed_resources}|${module_moved_resources}" >> "$TEMP_FILE"
     done <<< "$ALL_MODULES"
     
-    if [ "$GROUP_BY_ACTION_PATTERN" = true ]; then
-        # Group modules by identical action patterns using sort and awk
-        # Sort by pattern, then group
-        sort -t'|' -k1,1 "$TEMP_FILE" | awk -F'|' '
-        BEGIN {
-            current_pattern = ""
-            group_num = 1
-        }
-        {
-            pattern = $1
-            module = $2
-            summary = $3
-            
-            if (pattern != current_pattern) {
-                # New pattern group
-                if (current_pattern != "") {
-                    # Print previous group
-                    if (module_count > 1) {
-                        printf "  \033[1mGroup %d (%d modules)\033[0m: ", group_num, module_count
-                        print prev_summary
-                        for (i = 1; i <= module_count; i++) {
-                            printf "    - %s\n", modules[i]
-                        }
-                    } else {
-                        printf "  \033[1m%s\033[0m: ", modules[1]
-                        print prev_summary
-                    }
-                    group_num++
-                }
-                current_pattern = pattern
-                module_count = 0
-                prev_summary = summary
-            }
-            module_count++
-            modules[module_count] = module
-        }
-        END {
-            # Print last group
-            if (module_count > 1) {
-                printf "  \033[1mGroup %d (%d modules)\033[0m: ", group_num, module_count
-                print prev_summary
-                for (i = 1; i <= module_count; i++) {
-                    printf "    - %s\n", modules[i]
-                }
-            } else if (module_count == 1) {
-                printf "  \033[1m%s\033[0m: ", modules[1]
-                print prev_summary
-            }
-        }' | while IFS= read -r line; do
-            echo -e "$line"
-        done
-    else
-        # Display each module individually
-        while IFS='|' read -r pattern module summary; do
-            echo -e "  ${BOLD}${module}${NC}: $summary"
-        done < "$TEMP_FILE"
+    # Always group by action pattern when -g is used
+    if [ "$GROUP_BY_MODULE" = true ]; then
+        # Group modules by identical action patterns
+        # First, create a grouped file
+        GROUPED_FILE=$(mktemp)
+        trap "rm -f $TEMP_FILE $GROUPED_FILE" EXIT
+        
+        # Group by pattern using sort
+        sort -t'|' -k1,1 "$TEMP_FILE" > "$GROUPED_FILE"
+        
+        # Process groups in bash
+        current_pattern=""
+        group_num=1
+        declare -a current_modules=()
+        declare -a current_created=()
+        declare -a current_changed=()
+        declare -a current_destroyed=()
+        declare -a current_moved=()
+        current_summary=""
+        
+        while IFS='|' read -r pattern module summary created changed destroyed moved; do
+            if [ "$pattern" != "$current_pattern" ]; then
+                # Process previous group
+                if [ -n "$current_pattern" ]; then
+                    module_count=${#current_modules[@]}
+                    if [ "$module_count" -gt 1 ]; then
+                        echo -e "  ${BOLD}Group ${group_num} (${module_count} modules)${NC}: $current_summary"
+                        for mod in "${current_modules[@]}"; do
+                            echo -e "    - ${mod}"
+                        done
+                        # Show details if -d flag is set
+                        if [ "$GROUP_BY_ACTION_PATTERN" = true ]; then
+                            # Use resources from first module as template, show for all modules with their prefix
+                            first_created="${current_created[0]}"
+                            first_changed="${current_changed[0]}"
+                            first_destroyed="${current_destroyed[0]}"
+                            first_moved="${current_moved[0]}"
+                            
+                            # Created resources - show once with each module prefix
+                            if [ -n "$first_created" ]; then
+                                echo "$first_created" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource_template; do
+                                    # Extract resource path after module name
+                                    resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
+                                    # Show for each module in group
+                                    for mod_name in "${current_modules[@]}"; do
+                                        echo -e "      ${GREEN}${mod_name}.${resource_suffix}${NC}"
+                                    done
+                                done
+                            fi
+                            # Changed resources
+                            if [ -n "$first_changed" ]; then
+                                echo "$first_changed" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource_template; do
+                                    resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
+                                    for mod_name in "${current_modules[@]}"; do
+                                        echo -e "      ${YELLOW}${mod_name}.${resource_suffix}${NC}"
+                                    done
+                                done
+                            fi
+                            # Destroyed resources
+                            if [ -n "$first_destroyed" ]; then
+                                echo "$first_destroyed" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource_template; do
+                                    resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
+                                    for mod_name in "${current_modules[@]}"; do
+                                        echo -e "      ${RED}${mod_name}.${resource_suffix}${NC}"
+                                    done
+                                done
+                            fi
+                            # Moved resources
+                            if [ -n "$first_moved" ]; then
+                                echo "$first_moved" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource_template; do
+                                    resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
+                                    for mod_name in "${current_modules[@]}"; do
+                                        echo -e "      ${BLUE}${mod_name}.${resource_suffix}${NC}"
+                                    done
+                                done
+                            fi
+                        fi
+                    else
+                        echo -e "  ${BOLD}${current_modules[0]}${NC}: $current_summary"
+                        # Show details for single module if -d flag is set
+                        if [ "$GROUP_BY_ACTION_PATTERN" = true ]; then
+                            if [ -n "${current_created[0]}" ]; then
+                                echo "${current_created[0]}" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource; do
+                                    echo -e "      ${GREEN}${resource}${NC}"
+                                done
+                            fi
+                            if [ -n "${current_changed[0]}" ]; then
+                                echo "${current_changed[0]}" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource; do
+                                    echo -e "      ${YELLOW}${resource}${NC}"
+                                done
+                            fi
+                            if [ -n "${current_destroyed[0]}" ]; then
+                                echo "${current_destroyed[0]}" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource; do
+                                    echo -e "      ${RED}${resource}${NC}"
+                                done
+                            fi
+                            if [ -n "${current_moved[0]}" ]; then
+                                echo "${current_moved[0]}" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource; do
+                                    echo -e "      ${BLUE}${resource}${NC}"
+                                done
+                            fi
+                        fi
+                    fi
+                    group_num=$((group_num + 1))
+                fi
+                # Start new group
+                current_pattern="$pattern"
+                current_modules=("$module")
+                current_created=("$created")
+                current_changed=("$changed")
+                current_destroyed=("$destroyed")
+                current_moved=("$moved")
+                current_summary="$summary"
+            else
+                # Add to current group
+                current_modules+=("$module")
+                current_created+=("$created")
+                current_changed+=("$changed")
+                current_destroyed+=("$destroyed")
+                current_moved+=("$moved")
+            fi
+        done < "$GROUPED_FILE"
+        
+        # Process last group
+        if [ -n "$current_pattern" ]; then
+            module_count=${#current_modules[@]}
+            if [ "$module_count" -gt 1 ]; then
+                echo -e "  ${BOLD}Group ${group_num} (${module_count} modules)${NC}: $current_summary"
+                for mod in "${current_modules[@]}"; do
+                    echo -e "    - ${mod}"
+                done
+                # Show details if -d flag is set
+                if [ "$GROUP_BY_ACTION_PATTERN" = true ]; then
+                    first_created="${current_created[0]}"
+                    first_changed="${current_changed[0]}"
+                    first_destroyed="${current_destroyed[0]}"
+                    first_moved="${current_moved[0]}"
+                    
+                    if [ -n "$first_created" ]; then
+                        echo "$first_created" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource_template; do
+                            resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
+                            for mod_name in "${current_modules[@]}"; do
+                                echo -e "      ${GREEN}${mod_name}.${resource_suffix}${NC}"
+                            done
+                        done
+                    fi
+                    if [ -n "$first_changed" ]; then
+                        echo "$first_changed" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource_template; do
+                            resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
+                            for mod_name in "${current_modules[@]}"; do
+                                echo -e "      ${YELLOW}${mod_name}.${resource_suffix}${NC}"
+                            done
+                        done
+                    fi
+                    if [ -n "$first_destroyed" ]; then
+                        echo "$first_destroyed" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource_template; do
+                            resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
+                            for mod_name in "${current_modules[@]}"; do
+                                echo -e "      ${RED}${mod_name}.${resource_suffix}${NC}"
+                            done
+                        done
+                    fi
+                    if [ -n "$first_moved" ]; then
+                        echo "$first_moved" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource_template; do
+                            resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
+                            for mod_name in "${current_modules[@]}"; do
+                                echo -e "      ${BLUE}${mod_name}.${resource_suffix}${NC}"
+                            done
+                        done
+                    fi
+                fi
+            else
+                echo -e "  ${BOLD}${current_modules[0]}${NC}: $current_summary"
+                if [ "$GROUP_BY_ACTION_PATTERN" = true ]; then
+                    if [ -n "${current_created[0]}" ]; then
+                        echo "${current_created[0]}" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource; do
+                            echo -e "      ${GREEN}${resource}${NC}"
+                        done
+                    fi
+                    if [ -n "${current_changed[0]}" ]; then
+                        echo "${current_changed[0]}" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource; do
+                            echo -e "      ${YELLOW}${resource}${NC}"
+                        done
+                    fi
+                    if [ -n "${current_destroyed[0]}" ]; then
+                        echo "${current_destroyed[0]}" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource; do
+                            echo -e "      ${RED}${resource}${NC}"
+                        done
+                    fi
+                    if [ -n "${current_moved[0]}" ]; then
+                        echo "${current_moved[0]}" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource; do
+                            echo -e "      ${BLUE}${resource}${NC}"
+                        done
+                    fi
+                fi
+            fi
+        fi
+        
+        rm -f "$GROUPED_FILE"
     fi
-    
-    rm -f "$TEMP_FILE"
 fi
 
 echo ""
