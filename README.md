@@ -4,17 +4,20 @@ A bash script that makes Terraform plan output more human-readable by organizing
 
 ## Features
 
-- 📊 **Summary Statistics**: Quick overview of resources to be added, changed, destroyed, and moved
+- 📊 **Summary Statistics**: Quick overview of resources to be added, changed, replaced, destroyed, and moved
 - 🎨 **Color-Coded Output**: Visual distinction between different action types
   - 🟢 Green: Resources to be created
   - 🟡 Yellow: Resources to be modified/changed
+  - 💗 Pink: Resources to be replaced
   - 🔴 Red: Resources to be destroyed
   - 🔵 Blue: Resources to be moved
 - 📋 **Multiple View Modes**:
-  - Resources grouped by action type (created, modified, destroyed, moved)
+  - Resources grouped by action type (created, modified, replaced, destroyed, moved)
   - Alphabetically sorted list with color coding
   - Module-based grouping with action summaries
-- ⚙️ **Flexible Options**: Limit output, group by module, and more
+  - Group modules with identical changes together
+- ⚙️ **Flexible Options**: Limit output, group by module, show detailed changes, and more
+- ✅ **CI/CD Ready**: GitHub Actions workflow for validation and automated releases
 
 ## Requirements
 
@@ -46,7 +49,8 @@ If no file is specified, it defaults to `terraform_plan.txt`:
 ### Options
 
 - `-l, --limit N`: Limit output to N items per section (default: show all)
-- `-g, --group-by-module`: Show resources grouped by module with action summary
+- `-g, --group-by-module`: Group modules with identical action patterns together
+- `-d, --detail`: Show detailed changes for each module (use with `-g`)
 - `-h, --help`: Display help message
 
 ### Examples
@@ -58,8 +62,11 @@ If no file is specified, it defaults to `terraform_plan.txt`:
 # Limit output to 20 items per section
 ./terraform-plan-reader.sh --limit 20 terraform_plan.txt
 
-# Group resources by module
+# Group resources by module (modules with identical changes are grouped together)
 ./terraform-plan-reader.sh --group-by-module terraform_plan.txt
+
+# Group modules and show detailed changes
+./terraform-plan-reader.sh -g -d terraform_plan.txt
 
 # Combine options
 ./terraform-plan-reader.sh -l 50 -g terraform_plan.txt
@@ -73,13 +80,15 @@ The script provides several organized views of your Terraform plan:
 High-level statistics showing:
 - Total resources to add
 - Total resources to change
+- Total resources to replace
 - Total resources to destroy
 - Total resources to move
 
 ### 2. Resources by Action Type
-Four separate lists showing:
+Five separate lists showing:
 - **RESOURCES TO BE CREATED**: All resources that will be created
-- **RESOURCES TO BE MODIFIED/CHANGED**: All resources that will be updated or replaced
+- **RESOURCES TO BE MODIFIED/CHANGED**: All resources that will be updated
+- **RESOURCES TO BE REPLACED**: All resources that must be replaced (destroyed and recreated)
 - **RESOURCES TO BE DESTROYED**: All resources that will be destroyed
 - **RESOURCES TO BE MOVED**: All resources that will be moved
 
@@ -89,11 +98,19 @@ A combined list of all resources sorted alphabetically, with color coding indica
 ### 4. Module Grouping (with `-g` flag)
 When using the `--group-by-module` option:
 - Shows total number of modules touched
-- Lists each module with a summary of actions:
+- Groups modules with identical action patterns together
+- Lists each module or group with a summary of actions:
   - Number of resources added (green)
   - Number of resources changed (yellow)
+  - Number of resources replaced (pink)
   - Number of resources destroyed (red)
   - Number of resources moved (blue)
+
+### 5. Detailed Module Changes (with `-g -d` flags)
+When using both `--group-by-module` and `--detail` options:
+- For grouped modules: Shows resource structure once with `{module}` placeholder
+- For individual modules: Shows all detailed changes
+- Makes it easy to see what changes apply to which modules
 
 ## Example Output
 
@@ -106,6 +123,7 @@ Plan: 100 to add, 3 to change, 40 to destroy.
 
 Resources to add:    100
 Resources to change:  3
+Resources to replace: 5
 Resources to destroy: 40
 Resources to move:    120
 
@@ -127,7 +145,13 @@ ALL RESOURCES (ALPHABETICALLY SORTED):
 RESOURCES GROUPED BY MODULE:
 Total modules touched: 21
 
-  module.example[0]: 5 added, 2 destroyed, 6 moved
+  Group 1 (3 modules): 10 added, 5 replaced, 2 destroyed
+    - module.example[0]
+    - module.example[1]
+    - module.example[2]
+      {module}.resource.name (applies to all 3 modules)
+  
+  module.other[0]: 5 added, 2 destroyed, 6 moved
   ...
 ```
 
@@ -143,12 +167,33 @@ The script automatically:
 - Strips ANSI color codes from the input
 - Parses resource names and actions
 
+## CI/CD
+
+This repository includes GitHub Actions workflows for automated validation and releases:
+
+### Continuous Integration
+- **Syntax Check**: Validates bash syntax on every push/PR
+- **ShellCheck**: Runs static analysis to catch potential bugs and style issues
+- Runs automatically on pushes to `main`/`master` and pull requests
+
+### Automated Releases
+- **Release Workflow**: Automatically creates GitHub releases when tags are pushed
+- **Tag Format**: Use semantic versioning (e.g., `v1.0.0`)
+- **Release Assets**: Includes the validated script as a downloadable asset
+
+To create a release:
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
 ## Notes
 
 - The script handles large plan files efficiently
 - Color output works best in terminals that support ANSI colors
 - The `--limit` option is useful for quick overviews of large plans
 - Module grouping is particularly helpful for understanding impact across different modules
+- The `-g -d` combination is powerful for reviewing changes across many similar modules
 
 ## License
 
