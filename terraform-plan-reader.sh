@@ -68,6 +68,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
 BOLD='\033[1m'
 NC='\033[0m' # No Color
 
@@ -152,10 +153,10 @@ fi
 echo ""
 echo -e "${BOLD}${YELLOW}RESOURCES TO BE MODIFIED/CHANGED:${NC}"
 echo ""
-CHANGED_RESOURCES=$(grep -E "will be updated|must be replaced|will be replaced" "$INPUT_FILE" | \
+CHANGED_RESOURCES=$(grep -E "will be updated" "$INPUT_FILE" | \
     clean_line | \
     sed -E 's/^[[:space:]]*#[[:space:]]*//' | \
-    sed -E 's/[[:space:]]*(will be|must be).*$//' | \
+    sed -E 's/[[:space:]]*will be updated.*$//' | \
     sort -u)
 if [ -n "$CHANGED_RESOURCES" ]; then
     CHANGED_COUNT=$(echo "$CHANGED_RESOURCES" | grep -v '^$' | wc -l | tr -d ' ')
@@ -163,6 +164,27 @@ if [ -n "$CHANGED_RESOURCES" ]; then
     echo "$DISPLAYED"
     if [ "$LIMIT" -gt 0 ] && [ "$CHANGED_COUNT" -gt "$LIMIT" ]; then
         REMAINING=$((CHANGED_COUNT - LIMIT))
+        echo -e "${CYAN}  ... and $REMAINING more${NC}"
+    fi
+else
+    echo "  (none)"
+fi
+
+echo ""
+echo -e "${BOLD}${MAGENTA}RESOURCES TO BE REPLACED:${NC}"
+echo ""
+REPLACED_RESOURCES=$(grep -E "must be.*replaced|will be.*replaced" "$INPUT_FILE" | \
+    clean_line | \
+    sed -E 's/^[[:space:]]*#[[:space:]]*//' | \
+    sed -E 's/[[:space:]]*must be.*replaced.*$//' | \
+    sed -E 's/[[:space:]]*will be.*replaced.*$//' | \
+    sort -u)
+if [ -n "$REPLACED_RESOURCES" ]; then
+    REPLACED_COUNT=$(echo "$REPLACED_RESOURCES" | grep -v '^$' | wc -l | tr -d ' ')
+    DISPLAYED=$(echo "$REPLACED_RESOURCES" | apply_limit | sed 's/^/  /')
+    echo "$DISPLAYED"
+    if [ "$LIMIT" -gt 0 ] && [ "$REPLACED_COUNT" -gt "$LIMIT" ]; then
+        REMAINING=$((REPLACED_COUNT - LIMIT))
         echo -e "${CYAN}  ... and $REMAINING more${NC}"
     fi
 else
@@ -211,9 +233,10 @@ fi
 echo ""
 echo -e "${BOLD}${CYAN}ALL RESOURCES (ALPHABETICALLY SORTED):${NC}"
 echo ""
-ALL_RESOURCES=$(printf "%s\n%s\n%s\n%s\n" \
+ALL_RESOURCES=$(printf "%s\n%s\n%s\n%s\n%s\n" \
     "$CREATED_RESOURCES" \
     "$CHANGED_RESOURCES" \
+    "$REPLACED_RESOURCES" \
     "$DESTROYED_RESOURCES" \
     "$MOVED_RESOURCES" | \
     grep -v '^$' | \
@@ -231,6 +254,8 @@ if [ -n "$ALL_RESOURCES" ]; then
         COLOR="${NC}"  # Default: no color
         if echo "$CREATED_RESOURCES" | grep -Fxq "$resource"; then
             COLOR="${GREEN}"
+        elif echo "$REPLACED_RESOURCES" | grep -Fxq "$resource"; then
+            COLOR="${MAGENTA}"
         elif echo "$CHANGED_RESOURCES" | grep -Fxq "$resource"; then
             COLOR="${YELLOW}"
         elif echo "$DESTROYED_RESOURCES" | grep -Fxq "$resource"; then
@@ -258,9 +283,10 @@ if [ "$GROUP_BY_MODULE" = true ]; then
     # Collect all unique top-level modules only
     # Pattern: module.MODULENAME[0] or module.MODULENAME
     # Extract only the first module in the path (top-level), ignore nested modules
-    ALL_MODULES=$(printf "%s\n%s\n%s\n%s\n" \
+    ALL_MODULES=$(printf "%s\n%s\n%s\n%s\n%s\n" \
         "$CREATED_RESOURCES" \
         "$CHANGED_RESOURCES" \
+        "$REPLACED_RESOURCES" \
         "$DESTROYED_RESOURCES" \
         "$MOVED_RESOURCES" | \
         grep -v '^$' | \
@@ -288,6 +314,7 @@ if [ "$GROUP_BY_MODULE" = true ]; then
         module_escaped=$(echo "$module" | sed 's/\[/\\[/g; s/\]/\\]/g')
         created_count=$(echo "$CREATED_RESOURCES" | grep "^${module_escaped}\." 2>/dev/null | wc -l | tr -d ' ')
         changed_count=$(echo "$CHANGED_RESOURCES" | grep "^${module_escaped}\." 2>/dev/null | wc -l | tr -d ' ')
+        replaced_count=$(echo "$REPLACED_RESOURCES" | grep "^${module_escaped}\." 2>/dev/null | wc -l | tr -d ' ')
         destroyed_count=$(echo "$DESTROYED_RESOURCES" | grep "^${module_escaped}\." 2>/dev/null | wc -l | tr -d ' ')
         moved_count=0
         if [ -n "$MOVED_RESOURCES" ]; then
@@ -295,7 +322,7 @@ if [ "$GROUP_BY_MODULE" = true ]; then
         fi
         
         # Create action pattern key (without colors, for grouping)
-        action_pattern="${created_count}:${changed_count}:${destroyed_count}:${moved_count}"
+        action_pattern="${created_count}:${changed_count}:${replaced_count}:${destroyed_count}:${moved_count}"
         
         # Build action summary string for display
         action_summary=""
@@ -307,6 +334,13 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                 action_summary="${action_summary}, ${YELLOW}${changed_count} changed${NC}"
             else
                 action_summary="${YELLOW}${changed_count} changed${NC}"
+            fi
+        fi
+        if [ "$replaced_count" -gt 0 ]; then
+            if [ -n "$action_summary" ]; then
+                action_summary="${action_summary}, ${MAGENTA}${replaced_count} replaced${NC}"
+            else
+                action_summary="${MAGENTA}${replaced_count} replaced${NC}"
             fi
         fi
         if [ "$destroyed_count" -gt 0 ]; then
@@ -327,14 +361,15 @@ if [ "$GROUP_BY_MODULE" = true ]; then
         # Get actual resources for this module
         module_created_resources=$(echo "$CREATED_RESOURCES" | grep "^${module_escaped}\." 2>/dev/null | tr '\n' ';')
         module_changed_resources=$(echo "$CHANGED_RESOURCES" | grep "^${module_escaped}\." 2>/dev/null | tr '\n' ';')
+        module_replaced_resources=$(echo "$REPLACED_RESOURCES" | grep "^${module_escaped}\." 2>/dev/null | tr '\n' ';')
         module_destroyed_resources=$(echo "$DESTROYED_RESOURCES" | grep "^${module_escaped}\." 2>/dev/null | tr '\n' ';')
         module_moved_resources=""
         if [ -n "$MOVED_RESOURCES" ]; then
             module_moved_resources=$(echo "$MOVED_RESOURCES" | grep "^${module_escaped}\." 2>/dev/null | tr '\n' ';')
         fi
         
-        # Store in temp file: pattern|module|action_summary|created|changed|destroyed|moved
-        echo "${action_pattern}|${module}|${action_summary}|${module_created_resources}|${module_changed_resources}|${module_destroyed_resources}|${module_moved_resources}" >> "$TEMP_FILE"
+        # Store in temp file: pattern|module|action_summary|created|changed|replaced|destroyed|moved
+        echo "${action_pattern}|${module}|${action_summary}|${module_created_resources}|${module_changed_resources}|${module_replaced_resources}|${module_destroyed_resources}|${module_moved_resources}" >> "$TEMP_FILE"
     done <<< "$ALL_MODULES"
     
     # Always group by action pattern when -g is used
@@ -353,11 +388,12 @@ if [ "$GROUP_BY_MODULE" = true ]; then
         declare -a current_modules=()
         declare -a current_created=()
         declare -a current_changed=()
+        declare -a current_replaced=()
         declare -a current_destroyed=()
         declare -a current_moved=()
         current_summary=""
         
-        while IFS='|' read -r pattern module summary created changed destroyed moved; do
+        while IFS='|' read -r pattern module summary created changed replaced destroyed moved; do
             if [ "$pattern" != "$current_pattern" ]; then
                 # Process previous group
                 if [ -n "$current_pattern" ]; then
@@ -372,6 +408,7 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                             # Use resources from first module as template, show once with placeholder notation
                             first_created="${current_created[0]}"
                             first_changed="${current_changed[0]}"
+                            first_replaced="${current_replaced[0]}"
                             first_destroyed="${current_destroyed[0]}"
                             first_moved="${current_moved[0]}"
                             
@@ -389,6 +426,13 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                                 echo "$first_changed" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource_template; do
                                     resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
                                     echo -e "      ${YELLOW}{module}.${resource_suffix}${NC}"
+                                done
+                            fi
+                            # Replaced resources
+                            if [ -n "$first_replaced" ]; then
+                                echo "$first_replaced" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource_template; do
+                                    resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
+                                    echo -e "      ${MAGENTA}{module}.${resource_suffix}${NC}"
                                 done
                             fi
                             # Destroyed resources
@@ -420,6 +464,11 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                                     echo -e "      ${YELLOW}${resource}${NC}"
                                 done
                             fi
+                            if [ -n "${current_replaced[0]}" ]; then
+                                echo "${current_replaced[0]}" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource; do
+                                    echo -e "      ${MAGENTA}${resource}${NC}"
+                                done
+                            fi
                             if [ -n "${current_destroyed[0]}" ]; then
                                 echo "${current_destroyed[0]}" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource; do
                                     echo -e "      ${RED}${resource}${NC}"
@@ -439,6 +488,7 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                 current_modules=("$module")
                 current_created=("$created")
                 current_changed=("$changed")
+                current_replaced=("$replaced")
                 current_destroyed=("$destroyed")
                 current_moved=("$moved")
                 current_summary="$summary"
@@ -447,6 +497,7 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                 current_modules+=("$module")
                 current_created+=("$created")
                 current_changed+=("$changed")
+                current_replaced+=("$replaced")
                 current_destroyed+=("$destroyed")
                 current_moved+=("$moved")
             fi
@@ -464,6 +515,7 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                 if [ "$GROUP_BY_ACTION_PATTERN" = true ]; then
                     first_created="${current_created[0]}"
                     first_changed="${current_changed[0]}"
+                    first_replaced="${current_replaced[0]}"
                     first_destroyed="${current_destroyed[0]}"
                     first_moved="${current_moved[0]}"
                     
@@ -477,6 +529,12 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                         echo "$first_changed" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource_template; do
                             resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
                             echo -e "      ${YELLOW}{module}.${resource_suffix}${NC}"
+                        done
+                    fi
+                    if [ -n "$first_replaced" ]; then
+                        echo "$first_replaced" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource_template; do
+                            resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
+                            echo -e "      ${MAGENTA}{module}.${resource_suffix}${NC}"
                         done
                     fi
                     if [ -n "$first_destroyed" ]; then
@@ -503,6 +561,11 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                     if [ -n "${current_changed[0]}" ]; then
                         echo "${current_changed[0]}" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource; do
                             echo -e "      ${YELLOW}${resource}${NC}"
+                        done
+                    fi
+                    if [ -n "${current_replaced[0]}" ]; then
+                        echo "${current_replaced[0]}" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource; do
+                            echo -e "      ${MAGENTA}${resource}${NC}"
                         done
                     fi
                     if [ -n "${current_destroyed[0]}" ]; then
