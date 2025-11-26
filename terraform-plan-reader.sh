@@ -7,6 +7,7 @@
 INPUT_FILE="terraform_plan.txt"
 LIMIT=0  # 0 means no limit (show all)
 GROUP_BY_MODULE=false
+GROUP_BY_ACTION_PATTERN=false
 
 # Parse command-line arguments
 while [[ $# -gt 0 ]]; do
@@ -23,18 +24,24 @@ while [[ $# -gt 0 ]]; do
             GROUP_BY_MODULE=true
             shift
             ;;
+        -d|--detail)
+            GROUP_BY_ACTION_PATTERN=true
+            shift
+            ;;
         -h|--help)
             echo "Usage: $0 [OPTIONS] [FILE]"
             echo ""
             echo "Options:"
             echo "  -l, --limit N         Limit output to N items per section (default: show all)"
             echo "  -g, --group-by-module Show resources grouped by module with action summary"
+            echo "  -d, --detail          Group modules with identical action patterns (use with -g)"
             echo "  -h, --help            Show this help message"
             echo ""
             echo "Examples:"
             echo "  $0 terraform_plan.txt"
             echo "  $0 --limit 20 terraform_plan.txt"
             echo "  $0 --group-by-module terraform_plan.txt"
+            echo "  $0 -g -d terraform_plan.txt  # Group modules with same actions"
             echo "  $0 -l 50 -g"
             exit 0
             ;;
@@ -266,8 +273,11 @@ if [ "$GROUP_BY_MODULE" = true ]; then
     echo -e "${BOLD}Total modules touched:${NC} $MODULE_COUNT"
     echo ""
     
-    # Display each module with its actions
-    # Use here-string to avoid subshell issues
+    # Collect module actions first
+    # Use temporary file to avoid subshell issues with associative arrays
+    TEMP_FILE=$(mktemp)
+    trap "rm -f $TEMP_FILE" EXIT
+    
     while IFS= read -r module || [ -n "$module" ]; do
         if [ -z "$module" ]; then
             continue
@@ -284,7 +294,10 @@ if [ "$GROUP_BY_MODULE" = true ]; then
             moved_count=$(echo "$MOVED_RESOURCES" | grep "^${module_escaped}\." 2>/dev/null | wc -l | tr -d ' ')
         fi
         
-        # Build action summary string
+        # Create action pattern key (without colors, for grouping)
+        action_pattern="${created_count}:${changed_count}:${destroyed_count}:${moved_count}"
+        
+        # Build action summary string for display
         action_summary=""
         if [ "$created_count" -gt 0 ]; then
             action_summary="${GREEN}${created_count} added${NC}"
@@ -311,10 +324,69 @@ if [ "$GROUP_BY_MODULE" = true ]; then
             fi
         fi
         
-        if [ -n "$action_summary" ]; then
-            echo -e "  ${BOLD}${module}${NC}: $action_summary"
-        fi
+        # Store in temp file: pattern|module|action_summary
+        echo "${action_pattern}|${module}|${action_summary}" >> "$TEMP_FILE"
     done <<< "$ALL_MODULES"
+    
+    if [ "$GROUP_BY_ACTION_PATTERN" = true ]; then
+        # Group modules by identical action patterns using sort and awk
+        # Sort by pattern, then group
+        sort -t'|' -k1,1 "$TEMP_FILE" | awk -F'|' '
+        BEGIN {
+            current_pattern = ""
+            group_num = 1
+        }
+        {
+            pattern = $1
+            module = $2
+            summary = $3
+            
+            if (pattern != current_pattern) {
+                # New pattern group
+                if (current_pattern != "") {
+                    # Print previous group
+                    if (module_count > 1) {
+                        printf "  \033[1mGroup %d (%d modules)\033[0m: ", group_num, module_count
+                        print prev_summary
+                        for (i = 1; i <= module_count; i++) {
+                            printf "    - %s\n", modules[i]
+                        }
+                    } else {
+                        printf "  \033[1m%s\033[0m: ", modules[1]
+                        print prev_summary
+                    }
+                    group_num++
+                }
+                current_pattern = pattern
+                module_count = 0
+                prev_summary = summary
+            }
+            module_count++
+            modules[module_count] = module
+        }
+        END {
+            # Print last group
+            if (module_count > 1) {
+                printf "  \033[1mGroup %d (%d modules)\033[0m: ", group_num, module_count
+                print prev_summary
+                for (i = 1; i <= module_count; i++) {
+                    printf "    - %s\n", modules[i]
+                }
+            } else if (module_count == 1) {
+                printf "  \033[1m%s\033[0m: ", modules[1]
+                print prev_summary
+            }
+        }' | while IFS= read -r line; do
+            echo -e "$line"
+        done
+    else
+        # Display each module individually
+        while IFS='|' read -r pattern module summary; do
+            echo -e "  ${BOLD}${module}${NC}: $summary"
+        done < "$TEMP_FILE"
+    fi
+    
+    rm -f "$TEMP_FILE"
 fi
 
 echo ""
