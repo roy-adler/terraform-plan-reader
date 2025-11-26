@@ -68,7 +68,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
-MAGENTA='\033[0;35m'
+PINK='\033[1;35m'  # Bright magenta/pink for replaced resources
 BOLD='\033[1m'
 NC='\033[0m' # No Color
 
@@ -171,7 +171,7 @@ else
 fi
 
 echo ""
-echo -e "${BOLD}${MAGENTA}RESOURCES TO BE REPLACED:${NC}"
+echo -e "${BOLD}${PINK}RESOURCES TO BE REPLACED:${NC}"
 echo ""
 REPLACED_RESOURCES=$(grep -E "must be.*replaced|will be.*replaced" "$INPUT_FILE" | \
     clean_line | \
@@ -255,7 +255,7 @@ if [ -n "$ALL_RESOURCES" ]; then
         if echo "$CREATED_RESOURCES" | grep -Fxq "$resource"; then
             COLOR="${GREEN}"
         elif echo "$REPLACED_RESOURCES" | grep -Fxq "$resource"; then
-            COLOR="${MAGENTA}"
+            COLOR="${PINK}"
         elif echo "$CHANGED_RESOURCES" | grep -Fxq "$resource"; then
             COLOR="${YELLOW}"
         elif echo "$DESTROYED_RESOURCES" | grep -Fxq "$resource"; then
@@ -338,9 +338,9 @@ if [ "$GROUP_BY_MODULE" = true ]; then
         fi
         if [ "$replaced_count" -gt 0 ]; then
             if [ -n "$action_summary" ]; then
-                action_summary="${action_summary}, ${MAGENTA}${replaced_count} replaced${NC}"
+                action_summary="${action_summary}, ${PINK}${replaced_count} replaced${NC}"
             else
-                action_summary="${MAGENTA}${replaced_count} replaced${NC}"
+                action_summary="${PINK}${replaced_count} replaced${NC}"
             fi
         fi
         if [ "$destroyed_count" -gt 0 ]; then
@@ -432,7 +432,7 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                             if [ -n "$first_replaced" ]; then
                                 echo "$first_replaced" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource_template; do
                                     resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
-                                    echo -e "      ${MAGENTA}{module}.${resource_suffix}${NC}"
+                                    echo -e "      ${PINK}{module}.${resource_suffix}${NC}"
                                 done
                             fi
                             # Destroyed resources
@@ -466,7 +466,7 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                             fi
                             if [ -n "${current_replaced[0]}" ]; then
                                 echo "${current_replaced[0]}" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource; do
-                                    echo -e "      ${MAGENTA}${resource}${NC}"
+                                    echo -e "      ${PINK}${resource}${NC}"
                                 done
                             fi
                             if [ -n "${current_destroyed[0]}" ]; then
