@@ -20,10 +20,12 @@ jobs:
           bash -n terraform-plan-reader.sh
           echo "✓ Syntax check passed"
       
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+      
       - name: Run ShellCheck
-        uses: koalaman/shellcheck-action@v0.9.0
-        with:
-          files: terraform-plan-reader.sh
-          severity: error
-          format: gcc
+        run: |
+          shellcheck --severity=error --format=gcc terraform-plan-reader.sh
 
