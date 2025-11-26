@@ -369,48 +369,40 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                         done
                         # Show details if -d flag is set
                         if [ "$GROUP_BY_ACTION_PATTERN" = true ]; then
-                            # Use resources from first module as template, show for all modules with their prefix
+                            # Use resources from first module as template, show once with placeholder notation
                             first_created="${current_created[0]}"
                             first_changed="${current_changed[0]}"
                             first_destroyed="${current_destroyed[0]}"
                             first_moved="${current_moved[0]}"
                             
-                            # Created resources - show once with each module prefix
+                            # Created resources - show once with {module} placeholder
                             if [ -n "$first_created" ]; then
                                 echo "$first_created" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource_template; do
                                     # Extract resource path after module name
                                     resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
-                                    # Show for each module in group
-                                    for mod_name in "${current_modules[@]}"; do
-                                        echo -e "      ${GREEN}${mod_name}.${resource_suffix}${NC}"
-                                    done
+                                    # Show once with placeholder notation
+                                    echo -e "      ${GREEN}{module}.${resource_suffix}${NC} (applies to all ${module_count} modules)"
                                 done
                             fi
                             # Changed resources
                             if [ -n "$first_changed" ]; then
                                 echo "$first_changed" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource_template; do
                                     resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
-                                    for mod_name in "${current_modules[@]}"; do
-                                        echo -e "      ${YELLOW}${mod_name}.${resource_suffix}${NC}"
-                                    done
+                                    echo -e "      ${YELLOW}{module}.${resource_suffix}${NC} (applies to all ${module_count} modules)"
                                 done
                             fi
                             # Destroyed resources
                             if [ -n "$first_destroyed" ]; then
                                 echo "$first_destroyed" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource_template; do
                                     resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
-                                    for mod_name in "${current_modules[@]}"; do
-                                        echo -e "      ${RED}${mod_name}.${resource_suffix}${NC}"
-                                    done
+                                    echo -e "      ${RED}{module}.${resource_suffix}${NC} (applies to all ${module_count} modules)"
                                 done
                             fi
                             # Moved resources
                             if [ -n "$first_moved" ]; then
                                 echo "$first_moved" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource_template; do
                                     resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
-                                    for mod_name in "${current_modules[@]}"; do
-                                        echo -e "      ${BLUE}${mod_name}.${resource_suffix}${NC}"
-                                    done
+                                    echo -e "      ${BLUE}{module}.${resource_suffix}${NC} (applies to all ${module_count} modules)"
                                 done
                             fi
                         fi
@@ -478,33 +470,25 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                     if [ -n "$first_created" ]; then
                         echo "$first_created" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource_template; do
                             resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
-                            for mod_name in "${current_modules[@]}"; do
-                                echo -e "      ${GREEN}${mod_name}.${resource_suffix}${NC}"
-                            done
+                            echo -e "      ${GREEN}{module}.${resource_suffix}${NC} (applies to all ${module_count} modules)"
                         done
                     fi
                     if [ -n "$first_changed" ]; then
                         echo "$first_changed" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource_template; do
                             resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
-                            for mod_name in "${current_modules[@]}"; do
-                                echo -e "      ${YELLOW}${mod_name}.${resource_suffix}${NC}"
-                            done
+                            echo -e "      ${YELLOW}{module}.${resource_suffix}${NC} (applies to all ${module_count} modules)"
                         done
                     fi
                     if [ -n "$first_destroyed" ]; then
                         echo "$first_destroyed" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource_template; do
                             resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
-                            for mod_name in "${current_modules[@]}"; do
-                                echo -e "      ${RED}${mod_name}.${resource_suffix}${NC}"
-                            done
+                            echo -e "      ${RED}{module}.${resource_suffix}${NC} (applies to all ${module_count} modules)"
                         done
                     fi
                     if [ -n "$first_moved" ]; then
                         echo "$first_moved" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource_template; do
                             resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
-                            for mod_name in "${current_modules[@]}"; do
-                                echo -e "      ${BLUE}${mod_name}.${resource_suffix}${NC}"
-                            done
+                            echo -e "      ${BLUE}{module}.${resource_suffix}${NC} (applies to all ${module_count} modules)"
                         done
                     fi
                 fi
