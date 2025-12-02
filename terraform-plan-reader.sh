@@ -93,43 +93,64 @@ extract_resource_changes() {
     local escaped_resource=$(echo "$resource_name" | sed 's/\[/\\[/g; s/\]/\\]/g; s/\./\\./g')
     
     # Find the resource block - look for the header line with various "will be" patterns
-    local start_line=$(grep -nE "  # ${escaped_resource} (will be|must be)" "$INPUT_FILE" | head -1 | cut -d: -f1)
+    # Use a flexible pattern that works with or without ANSI codes - just match resource name and "will be" or "must be"
+    local start_line=$(grep -n "${resource_name}.*\(will be\|must be\)" "$INPUT_FILE" | head -1 | cut -d: -f1)
     
     if [ -z "$start_line" ]; then
         return
     fi
     
+    # Find the end line - look for the next resource header (limit search to next 500 lines for performance)
+    local end_line=$((start_line + 500))
+    local file_lines=$(wc -l < "$INPUT_FILE" | tr -d ' ')
+    if [ "$end_line" -gt "$file_lines" ]; then
+        end_line="$file_lines"
+    fi
+    
+    # Find the actual end by looking for the next resource header within the range
+    local next_resource_line=$(sed -n "${start_line},${end_line}p" "$INPUT_FILE" | grep -nE "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+Z .*  # .* (will be|must be)" | grep -v "${resource_name}" | head -1 | cut -d: -f1)
+    if [ -n "$next_resource_line" ]; then
+        end_line=$((start_line + next_resource_line - 1))
+    fi
+    
     # Extract lines starting from the resource header until we hit the next resource or end of block
-    awk -v start="$start_line" -v resource="$escaped_resource" -v placeholder="$use_placeholder" -v module_name="$placeholder_module" '
+    # Start from line after the header (skip the header itself and any reason line)
+    sed -n "${start_line},${end_line}p" "$INPUT_FILE" | awk -v resource="$resource_name" -v placeholder="$use_placeholder" -v module_name="$placeholder_module" '
         BEGIN { 
             in_block = 0
             brace_count = 0
-            skip_next = 0
+            lines_processed = 0
         }
-        NR >= start {
-            # Detect start of resource block (various formats: "will be created", "will be updated", "must be replaced", etc.)
-            if (/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+Z [1m  # / && $0 ~ resource && (/(will be|must be)/)) {
+        {
+            lines_processed++
+            
+            # Detect start of resource block - look for the resource name and "will be" or "must be"
+            # Use index() instead of regex to avoid escape sequence warnings
+            resource_found = index($0, resource) > 0
+            has_action = (index($0, "will be") > 0 || index($0, "must be") > 0)
+            if (lines_processed == 1 && resource_found && has_action) {
                 in_block = 1
-                skip_next = 1
+                # Skip header line and check next line
                 next
             }
             
-            # Skip the line after header (usually the reason line like "# (because ...)")
-            if (skip_next) {
-                skip_next = 0
-                # Skip reason lines
-                if (/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+Z   # \(because/) {
-                    next
-                }
+            # Skip reason lines (lines that start with "# (because...)" after the header)
+            if (in_block && lines_processed == 2 && $0 ~ /# \(because/) {
+                next
             }
             
-            # Detect next resource (stop processing)
-            if (in_block && /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+Z [1m  # / && $0 !~ resource) {
+            # Detect next resource (stop processing) - look for a new resource header
+            # Use index() to avoid escape sequence warnings
+            is_timestamp_line = ($0 ~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+Z /)
+            has_resource_marker = (index($0, "  # ") > 0)
+            next_resource_found = (index($0, resource) == 0)
+            has_next_action = (index($0, "will be") > 0 || index($0, "must be") > 0)
+            if (in_block && is_timestamp_line && has_resource_marker && next_resource_found && has_next_action) {
                 exit
             }
             
             if (in_block) {
-                # Track braces
+                # Track braces to know when we exit the resource block
                 brace_count += gsub(/{/, "&")
                 brace_count -= gsub(/}/, "&")
                 
@@ -140,22 +161,25 @@ extract_resource_changes() {
                 # Remove ANSI codes
                 gsub(/\x1b\[[0-9;]*m/, "", line)
                 
-                # Check if this is a change line (has +, -, ~, or ->, or is a parameter line within the resource block)
-                if (line ~ /^[[:space:]]*[+-~]/ || line ~ /->/ || (line ~ /^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]*=/ && brace_count > 0)) {
+                # Check if this is a change line (has +, -, ~, or ->)
+                # Skip the resource declaration line (-/+ resource "...")
+                if ((line ~ /^[[:space:]]*[+-~]/ || line ~ /->/) && line !~ /resource "[^"]*" "[^"]*" \{/) {
                     # Replace module name with placeholder if requested
                     if (placeholder == "true" && module_name != "") {
-                        gsub(module_name, "{module}", line)
+                        # Escape special characters for gsub
+                        escaped_module = module_name
+                        gsub(/\[/, "\\[", escaped_module)
+                        gsub(/\]/, "\\]", escaped_module)
+                        gsub(/\./, "\\.", escaped_module)
+                        gsub(escaped_module, "{module}", line)
                     }
                     
-                    # Clean up and format - preserve some indentation
-                    # Remove excessive leading whitespace but keep structure
-                    sub(/^[[:space:]]{6,}/, "      ", line)
-                    # Skip comment-only lines and empty lines
-                    if (line !~ /^[[:space:]]*#/ && length(line) > 0) {
-                        # Only show lines with actual changes or parameter definitions
-                        if (line ~ /[+-~]/ || line ~ /->/ || line ~ /^[[:space:]]*[a-zA-Z_]/) {
-                            print "        " line
-                        }
+                    # Clean up and format - remove leading whitespace but keep some structure
+                    sub(/^[[:space:]]+/, "", line)
+                    # Skip comment-only lines and empty lines, but show change lines
+                    if (line !~ /^#/ && length(line) > 0 && (line ~ /[+-~]/ || line ~ /->/)) {
+                        # Show parameter name and value changes
+                        print "        " line
                     }
                 }
                 
@@ -165,7 +189,7 @@ extract_resource_changes() {
                 }
             }
         }
-    ' "$INPUT_FILE"
+    '
 }
 
 # Extract and display summary
@@ -424,27 +448,114 @@ if [ "$GROUP_BY_MODULE" = true ]; then
     echo -e "${BOLD}Total modules touched:${NC} $MODULE_COUNT"
     echo ""
     
-    # Collect module actions first
+    # Collect module actions first - optimize by processing all modules in a single awk pass
     # Use temporary file to avoid subshell issues with associative arrays
     TEMP_FILE=$(mktemp)
     trap "rm -f $TEMP_FILE" EXIT
     
-    while IFS= read -r module || [ -n "$module" ]; do
+    # Process all modules and resources in a single efficient awk pass
+    printf "%s\n" "$ALL_MODULES" | awk -v created="$CREATED_RESOURCES" -v changed="$CHANGED_RESOURCES" -v replaced="$REPLACED_RESOURCES" -v destroyed="$DESTROYED_RESOURCES" -v moved="$MOVED_RESOURCES" '
+    BEGIN {
+        # Build lookup arrays for fast resource type checking
+        split(created, created_arr, "\n")
+        split(changed, changed_arr, "\n")
+        split(replaced, replaced_arr, "\n")
+        split(destroyed, destroyed_arr, "\n")
+        split(moved, moved_arr, "\n")
+        
+        for (i in created_arr) if (length(created_arr[i]) > 0) created_set[created_arr[i]] = 1
+        for (i in changed_arr) if (length(changed_arr[i]) > 0) changed_set[changed_arr[i]] = 1
+        for (i in replaced_arr) if (length(replaced_arr[i]) > 0) replaced_set[replaced_arr[i]] = 1
+        for (i in destroyed_arr) if (length(destroyed_arr[i]) > 0) destroyed_set[destroyed_arr[i]] = 1
+        for (i in moved_arr) if (length(moved_arr[i]) > 0) moved_set[moved_arr[i]] = 1
+        
+        # Process all resources and group by module
+        all_resources = created "\n" changed "\n" replaced "\n" destroyed "\n" moved
+        split(all_resources, all_resources_arr, "\n")
+        
+        for (i in all_resources_arr) {
+            resource = all_resources_arr[i]
+            if (length(resource) == 0) continue
+            
+            # Extract module name (top-level only)
+            if (match(resource, /^(module\.[a-zA-Z0-9_]+(\[[0-9]+\])?)(\..*)?$/, arr)) {
+                module = arr[1]
+                
+                # Determine resource type
+                type = ""
+                if (resource in created_set) type = "created"
+                else if (resource in changed_set) type = "changed"
+                else if (resource in replaced_set) type = "replaced"
+                else if (resource in destroyed_set) type = "destroyed"
+                else if (resource in moved_set) type = "moved"
+                
+                if (type != "") {
+                    # Count by type
+                    if (type == "created") module_created_count[module]++
+                    else if (type == "changed") module_changed_count[module]++
+                    else if (type == "replaced") module_replaced_count[module]++
+                    else if (type == "destroyed") module_destroyed_count[module]++
+                    else if (type == "moved") module_moved_count[module]++
+                    
+                    # Store resource
+                    if (type == "created") {
+                        if (module_created_list[module] == "") module_created_list[module] = resource
+                        else module_created_list[module] = module_created_list[module] ";" resource
+                    } else if (type == "changed") {
+                        if (module_changed_list[module] == "") module_changed_list[module] = resource
+                        else module_changed_list[module] = module_changed_list[module] ";" resource
+                    } else if (type == "replaced") {
+                        if (module_replaced_list[module] == "") module_replaced_list[module] = resource
+                        else module_replaced_list[module] = module_replaced_list[module] ";" resource
+                    } else if (type == "destroyed") {
+                        if (module_destroyed_list[module] == "") module_destroyed_list[module] = resource
+                        else module_destroyed_list[module] = module_destroyed_list[module] ";" resource
+                    } else if (type == "moved") {
+                        if (module_moved_list[module] == "") module_moved_list[module] = resource
+                        else module_moved_list[module] = module_moved_list[module] ";" resource
+                    }
+                }
+            }
+        }
+    }
+    {
+        # Process each module from ALL_MODULES list
+        module = $0
+        if (length(module) == 0) next
+        
+        created_count = module_created_count[module] + 0
+        changed_count = module_changed_count[module] + 0
+        replaced_count = module_replaced_count[module] + 0
+        destroyed_count = module_destroyed_count[module] + 0
+        moved_count = module_moved_count[module] + 0
+        
+        created_list = module_created_list[module]
+        changed_list = module_changed_list[module]
+        replaced_list = module_replaced_list[module]
+        destroyed_list = module_destroyed_list[module]
+        moved_list = module_moved_list[module]
+        
+        if (created_list == "") created_list = ""
+        if (changed_list == "") changed_list = ""
+        if (replaced_list == "") replaced_list = ""
+        if (destroyed_list == "") destroyed_list = ""
+        if (moved_list == "") moved_list = ""
+        
+        print created_count ":" changed_count ":" replaced_count ":" destroyed_count ":" moved_count "|" module "|" created_list "|" changed_list "|" replaced_list "|" destroyed_list "|" moved_list
+    }
+    ' > "$TEMP_FILE"
+    
+    # Process the temp file to build action summaries
+    while IFS='|' read -r counts module module_created_resources module_changed_resources module_replaced_resources module_destroyed_resources module_moved_resources; do
         if [ -z "$module" ]; then
             continue
         fi
         
-        # Count actions for this module using grep
-        # Escape brackets in module name for grep
-        module_escaped=$(echo "$module" | sed 's/\[/\\[/g; s/\]/\\]/g')
-        created_count=$(echo "$CREATED_RESOURCES" | grep "^${module_escaped}\." 2>/dev/null | wc -l | tr -d ' ')
-        changed_count=$(echo "$CHANGED_RESOURCES" | grep "^${module_escaped}\." 2>/dev/null | wc -l | tr -d ' ')
-        replaced_count=$(echo "$REPLACED_RESOURCES" | grep "^${module_escaped}\." 2>/dev/null | wc -l | tr -d ' ')
-        destroyed_count=$(echo "$DESTROYED_RESOURCES" | grep "^${module_escaped}\." 2>/dev/null | wc -l | tr -d ' ')
-        moved_count=0
-        if [ -n "$MOVED_RESOURCES" ]; then
-            moved_count=$(echo "$MOVED_RESOURCES" | grep "^${module_escaped}\." 2>/dev/null | wc -l | tr -d ' ')
-        fi
+        created_count=$(echo "$counts" | cut -d: -f1)
+        changed_count=$(echo "$counts" | cut -d: -f2)
+        replaced_count=$(echo "$counts" | cut -d: -f3)
+        destroyed_count=$(echo "$counts" | cut -d: -f4)
+        moved_count=$(echo "$counts" | cut -d: -f5)
         
         # Create action pattern key (without colors, for grouping)
         action_pattern="${created_count}:${changed_count}:${replaced_count}:${destroyed_count}:${moved_count}"
@@ -481,16 +592,6 @@ if [ "$GROUP_BY_MODULE" = true ]; then
             else
                 action_summary="${BLUE}${moved_count} moved${NC}"
             fi
-        fi
-        
-        # Get actual resources for this module
-        module_created_resources=$(echo "$CREATED_RESOURCES" | grep "^${module_escaped}\." 2>/dev/null | tr '\n' ';')
-        module_changed_resources=$(echo "$CHANGED_RESOURCES" | grep "^${module_escaped}\." 2>/dev/null | tr '\n' ';')
-        module_replaced_resources=$(echo "$REPLACED_RESOURCES" | grep "^${module_escaped}\." 2>/dev/null | tr '\n' ';')
-        module_destroyed_resources=$(echo "$DESTROYED_RESOURCES" | grep "^${module_escaped}\." 2>/dev/null | tr '\n' ';')
-        module_moved_resources=""
-        if [ -n "$MOVED_RESOURCES" ]; then
-            module_moved_resources=$(echo "$MOVED_RESOURCES" | grep "^${module_escaped}\." 2>/dev/null | tr '\n' ';')
         fi
         
         # Store in temp file: pattern|module|action_summary|created|changed|replaced|destroyed|moved
