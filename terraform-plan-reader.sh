@@ -8,6 +8,7 @@ INPUT_FILE="terraform_plan.txt"
 LIMIT=0  # 0 means no limit (show all)
 GROUP_BY_MODULE=false
 GROUP_BY_ACTION_PATTERN=false
+SHOW_ALPHABETICAL=false
 
 # Parse command-line arguments
 while [[ $# -gt 0 ]]; do
@@ -28,6 +29,10 @@ while [[ $# -gt 0 ]]; do
             GROUP_BY_ACTION_PATTERN=true
             shift
             ;;
+        -a|--alphabetical)
+            SHOW_ALPHABETICAL=true
+            shift
+            ;;
         -h|--help)
             echo "Usage: $0 [OPTIONS] [FILE]"
             echo ""
@@ -35,6 +40,7 @@ while [[ $# -gt 0 ]]; do
             echo "  -l, --limit N         Limit output to N items per section (default: show all)"
             echo "  -g, --group-by-module Group modules with identical action patterns"
             echo "  -d, --detail          Show detailed changes for each module (use with -g)"
+            echo "  -a, --alphabetical    Show alphabetically sorted list of all resources"
             echo "  -h, --help            Show this help message"
             echo ""
             echo "Examples:"
@@ -103,6 +109,7 @@ fi
 # Count moves and extract moved resources
 MOVED_RESOURCES=""
 MOVE_COUNT=$(grep -c "has moved to" "$INPUT_FILE" 2>/dev/null || echo "0")
+MOVE_COUNT=$(echo "$MOVE_COUNT" | tr -d ' \n')
 if [ "$MOVE_COUNT" -gt 0 ]; then
     MOVED_RESOURCES=$(grep "has moved to" "$INPUT_FILE" | \
         clean_line | \
@@ -234,49 +241,45 @@ if [ "$MOVE_COUNT" -gt 0 ]; then
     fi
 fi
 
-# Combine all resources and sort alphabetically with color coding
-echo ""
-echo -e "${BOLD}${CYAN}ALL RESOURCES (ALPHABETICALLY SORTED):${NC}"
-echo ""
-ALL_RESOURCES=$(printf "%s\n%s\n%s\n%s\n%s\n" \
-    "$CREATED_RESOURCES" \
-    "$CHANGED_RESOURCES" \
-    "$REPLACED_RESOURCES" \
-    "$DESTROYED_RESOURCES" \
-    "$MOVED_RESOURCES" | \
-    grep -v '^$' | \
-    sort -u)
-if [ -n "$ALL_RESOURCES" ]; then
-    ALL_COUNT=$(echo "$ALL_RESOURCES" | grep -v '^$' | wc -l | tr -d ' ')
-    
-    # Color-code each resource based on its category
-    echo "$ALL_RESOURCES" | apply_limit | while IFS= read -r resource; do
-        if [ -z "$resource" ]; then
-            continue
-        fi
-        
-        # Determine color based on which list the resource belongs to
-        COLOR="${NC}"  # Default: no color
-        if echo "$CREATED_RESOURCES" | grep -Fxq "$resource"; then
-            COLOR="${GREEN}"
-        elif echo "$REPLACED_RESOURCES" | grep -Fxq "$resource"; then
-            COLOR="${PINK}"
-        elif echo "$CHANGED_RESOURCES" | grep -Fxq "$resource"; then
-            COLOR="${YELLOW}"
-        elif echo "$DESTROYED_RESOURCES" | grep -Fxq "$resource"; then
-            COLOR="${RED}"
-        elif [ -n "$MOVED_RESOURCES" ] && echo "$MOVED_RESOURCES" | grep -Fxq "$resource"; then
-            COLOR="${BLUE}"
-        fi
-        
-        echo -e "${COLOR}  ${resource}${NC}"
-    done
-    if [ "$LIMIT" -gt 0 ] && [ "$ALL_COUNT" -gt "$LIMIT" ]; then
-        REMAINING=$((ALL_COUNT - LIMIT))
-        echo -e "${CYAN}  ... and $REMAINING more${NC}"
+# Combine all resources and sort alphabetically with color coding (only if -a flag is set)
+if [ "$SHOW_ALPHABETICAL" = true ]; then
+    echo ""
+    echo -e "${BOLD}${CYAN}ALL RESOURCES (ALPHABETICALLY SORTED):${NC}"
+    echo ""
+    ALL_RESOURCES=$(printf "%s\n%s\n%s\n%s\n%s\n" \
+        "$CREATED_RESOURCES" \
+        "$CHANGED_RESOURCES" \
+        "$REPLACED_RESOURCES" \
+        "$DESTROYED_RESOURCES" \
+        "$MOVED_RESOURCES" | \
+        grep -v '^$' | \
+        sort -u)
+    if [ -n "$ALL_RESOURCES" ]; then
+        # Color-code each resource based on its category (not affected by -l limit)
+        echo "$ALL_RESOURCES" | while IFS= read -r resource; do
+            if [ -z "$resource" ]; then
+                continue
+            fi
+            
+            # Determine color based on which list the resource belongs to
+            COLOR="${NC}"  # Default: no color
+            if echo "$CREATED_RESOURCES" | grep -Fxq "$resource"; then
+                COLOR="${GREEN}"
+            elif echo "$REPLACED_RESOURCES" | grep -Fxq "$resource"; then
+                COLOR="${PINK}"
+            elif echo "$CHANGED_RESOURCES" | grep -Fxq "$resource"; then
+                COLOR="${YELLOW}"
+            elif echo "$DESTROYED_RESOURCES" | grep -Fxq "$resource"; then
+                COLOR="${RED}"
+            elif [ -n "$MOVED_RESOURCES" ] && echo "$MOVED_RESOURCES" | grep -Fxq "$resource"; then
+                COLOR="${BLUE}"
+            fi
+            
+            echo -e "${COLOR}  ${resource}${NC}"
+        done
+    else
+        echo "  (none)"
     fi
-else
-    echo "  (none)"
 fi
 
 # Group by module if requested
