@@ -8,6 +8,7 @@ INPUT_FILE="terraform_plan.txt"
 LIMIT=0  # 0 means no limit (show all)
 GROUP_BY_MODULE=false
 SHOW_ALPHABETICAL=false
+SHOW_DETAILED_CHANGES=false
 
 # Parse command-line arguments
 while [[ $# -gt 0 ]]; do
@@ -25,7 +26,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -d|--detail)
-            # Reserved for future use
+            SHOW_DETAILED_CHANGES=true
             shift
             ;;
         -a|--alphabetical)
@@ -38,7 +39,7 @@ while [[ $# -gt 0 ]]; do
             echo "Options:"
             echo "  -l, --limit N         Limit output to N items per section (default: show all)"
             echo "  -g, --group-by-module Group modules with identical action patterns and show detailed changes"
-            echo "  -d, --detail          Reserved for future use"
+            echo "  -d, --detail          Show detailed parameter changes for resources"
             echo "  -a, --alphabetical    Show alphabetically sorted list of all resources"
             echo "  -h, --help            Show this help message"
             echo ""
@@ -82,6 +83,91 @@ clean_line() {
     sed -E 's/\x1b\[[0-9;]*m//g'
 }
 
+# Function to extract detailed changes for a resource
+extract_resource_changes() {
+    local resource_name="$1"
+    local use_placeholder="${2:-false}"
+    local placeholder_module="$3"
+    
+    # Escape special characters for grep, but keep brackets for matching
+    local escaped_resource=$(echo "$resource_name" | sed 's/\[/\\[/g; s/\]/\\]/g; s/\./\\./g')
+    
+    # Find the resource block - look for the header line with various "will be" patterns
+    local start_line=$(grep -nE "  # ${escaped_resource} (will be|must be)" "$INPUT_FILE" | head -1 | cut -d: -f1)
+    
+    if [ -z "$start_line" ]; then
+        return
+    fi
+    
+    # Extract lines starting from the resource header until we hit the next resource or end of block
+    awk -v start="$start_line" -v resource="$escaped_resource" -v placeholder="$use_placeholder" -v module_name="$placeholder_module" '
+        BEGIN { 
+            in_block = 0
+            brace_count = 0
+            skip_next = 0
+        }
+        NR >= start {
+            # Detect start of resource block (various formats: "will be created", "will be updated", "must be replaced", etc.)
+            if (/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+Z [1m  # / && $0 ~ resource && (/(will be|must be)/)) {
+                in_block = 1
+                skip_next = 1
+                next
+            }
+            
+            # Skip the line after header (usually the reason line like "# (because ...)")
+            if (skip_next) {
+                skip_next = 0
+                # Skip reason lines
+                if (/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+Z   # \(because/) {
+                    next
+                }
+            }
+            
+            # Detect next resource (stop processing)
+            if (in_block && /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+Z [1m  # / && $0 !~ resource) {
+                exit
+            }
+            
+            if (in_block) {
+                # Track braces
+                brace_count += gsub(/{/, "&")
+                brace_count -= gsub(/}/, "&")
+                
+                # Extract change lines (those with +, -, ~, or ->)
+                line = $0
+                # Remove timestamp prefix
+                sub(/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+Z /, "", line)
+                # Remove ANSI codes
+                gsub(/\x1b\[[0-9;]*m/, "", line)
+                
+                # Check if this is a change line (has +, -, ~, or ->, or is a parameter line within the resource block)
+                if (line ~ /^[[:space:]]*[+-~]/ || line ~ /->/ || (line ~ /^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]*=/ && brace_count > 0)) {
+                    # Replace module name with placeholder if requested
+                    if (placeholder == "true" && module_name != "") {
+                        gsub(module_name, "{module}", line)
+                    }
+                    
+                    # Clean up and format - preserve some indentation
+                    # Remove excessive leading whitespace but keep structure
+                    sub(/^[[:space:]]{6,}/, "      ", line)
+                    # Skip comment-only lines and empty lines
+                    if (line !~ /^[[:space:]]*#/ && length(line) > 0) {
+                        # Only show lines with actual changes or parameter definitions
+                        if (line ~ /[+-~]/ || line ~ /->/ || line ~ /^[[:space:]]*[a-zA-Z_]/) {
+                            print "        " line
+                        }
+                    }
+                }
+                
+                # Stop when we exit the resource block (closing brace at root level)
+                if (brace_count < 0) {
+                    exit
+                }
+            }
+        }
+    ' "$INPUT_FILE"
+}
+
 # Extract and display summary
 echo -e "${BOLD}${CYAN}═══════════════════════════════════════════════════════════════${NC}"
 echo -e "${BOLD}${CYAN}  TERRAFORM PLAN SUMMARY${NC}"
@@ -120,6 +206,7 @@ echo -e "${GREEN}Resources to add:${NC}    $ADD_COUNT"
 echo -e "${YELLOW}Resources to change:${NC}  $CHANGE_COUNT"
 # Count replaced resources for summary
 REPLACED_COUNT_SUMMARY=$(grep -cE "must be.*replaced|will be.*replaced" "$INPUT_FILE" 2>/dev/null || echo "0")
+REPLACED_COUNT_SUMMARY=$(echo "$REPLACED_COUNT_SUMMARY" | tr -d ' \n')
 if [ "$REPLACED_COUNT_SUMMARY" -gt 0 ]; then
     echo -e "${PINK}Resources to replace:${NC} $REPLACED_COUNT_SUMMARY"
 fi
@@ -170,11 +257,27 @@ CHANGED_RESOURCES=$(grep -E "will be updated" "$INPUT_FILE" | \
     sort -u)
 if [ -n "$CHANGED_RESOURCES" ]; then
     CHANGED_COUNT=$(echo "$CHANGED_RESOURCES" | grep -v '^$' | wc -l | tr -d ' ')
-    DISPLAYED=$(echo "$CHANGED_RESOURCES" | apply_limit | sed 's/^/  /')
-    echo "$DISPLAYED"
-    if [ "$LIMIT" -gt 0 ] && [ "$CHANGED_COUNT" -gt "$LIMIT" ]; then
-        REMAINING=$((CHANGED_COUNT - LIMIT))
-        echo -e "${CYAN}  ... and $REMAINING more${NC}"
+    if [ "$SHOW_DETAILED_CHANGES" = true ]; then
+        # Show detailed changes for each resource
+        echo "$CHANGED_RESOURCES" | apply_limit | while IFS= read -r resource; do
+            if [ -z "$resource" ]; then
+                continue
+            fi
+            echo -e "  ${YELLOW}${resource}${NC}"
+            extract_resource_changes "$resource" "false" ""
+            echo ""
+        done
+        if [ "$LIMIT" -gt 0 ] && [ "$CHANGED_COUNT" -gt "$LIMIT" ]; then
+            REMAINING=$((CHANGED_COUNT - LIMIT))
+            echo -e "${CYAN}  ... and $REMAINING more${NC}"
+        fi
+    else
+        DISPLAYED=$(echo "$CHANGED_RESOURCES" | apply_limit | sed 's/^/  /')
+        echo "$DISPLAYED"
+        if [ "$LIMIT" -gt 0 ] && [ "$CHANGED_COUNT" -gt "$LIMIT" ]; then
+            REMAINING=$((CHANGED_COUNT - LIMIT))
+            echo -e "${CYAN}  ... and $REMAINING more${NC}"
+        fi
     fi
 else
     echo "  (none)"
@@ -191,11 +294,27 @@ REPLACED_RESOURCES=$(grep -E "must be.*replaced|will be.*replaced" "$INPUT_FILE"
     sort -u)
 if [ -n "$REPLACED_RESOURCES" ]; then
     REPLACED_COUNT=$(echo "$REPLACED_RESOURCES" | grep -v '^$' | wc -l | tr -d ' ')
-    DISPLAYED=$(echo "$REPLACED_RESOURCES" | apply_limit | sed 's/^/  /')
-    echo "$DISPLAYED"
-    if [ "$LIMIT" -gt 0 ] && [ "$REPLACED_COUNT" -gt "$LIMIT" ]; then
-        REMAINING=$((REPLACED_COUNT - LIMIT))
-        echo -e "${CYAN}  ... and $REMAINING more${NC}"
+    if [ "$SHOW_DETAILED_CHANGES" = true ]; then
+        # Show detailed changes for each resource
+        echo "$REPLACED_RESOURCES" | apply_limit | while IFS= read -r resource; do
+            if [ -z "$resource" ]; then
+                continue
+            fi
+            echo -e "  ${PINK}${resource}${NC}"
+            extract_resource_changes "$resource" "false" ""
+            echo ""
+        done
+        if [ "$LIMIT" -gt 0 ] && [ "$REPLACED_COUNT" -gt "$LIMIT" ]; then
+            REMAINING=$((REPLACED_COUNT - LIMIT))
+            echo -e "${CYAN}  ... and $REMAINING more${NC}"
+        fi
+    else
+        DISPLAYED=$(echo "$REPLACED_RESOURCES" | apply_limit | sed 's/^/  /')
+        echo "$DISPLAYED"
+        if [ "$LIMIT" -gt 0 ] && [ "$REPLACED_COUNT" -gt "$LIMIT" ]; then
+            REMAINING=$((REPLACED_COUNT - LIMIT))
+            echo -e "${CYAN}  ... and $REMAINING more${NC}"
+        fi
     fi
 else
     echo "  (none)"
@@ -433,6 +552,15 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                                     resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
                                     echo -e "      ${YELLOW}{module}.${resource_suffix}${NC}"
                                 done
+                                # Show detailed changes if -d flag is set (show once for the group using first resource as template)
+                                if [ "$SHOW_DETAILED_CHANGES" = true ] && [ -n "${current_modules[0]}" ]; then
+                                    first_resource=$(echo "$first_changed" | tr ';' '\n' | grep -v '^$' | head -1)
+                                    if [ -n "$first_resource" ]; then
+                                        # Extract module name for placeholder replacement
+                                        module_name=$(echo "${current_modules[0]}" | sed 's/\[/\\[/g; s/\]/\\]/g')
+                                        extract_resource_changes "$first_resource" "true" "$module_name"
+                                    fi
+                                fi
                             fi
                             # Replaced resources
                             if [ -n "$first_replaced" ]; then
@@ -440,6 +568,14 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                                     resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
                                     echo -e "      ${PINK}{module}.${resource_suffix}${NC}"
                                 done
+                                # Show detailed changes if -d flag is set
+                                if [ "$SHOW_DETAILED_CHANGES" = true ] && [ -n "${current_modules[0]}" ]; then
+                                    first_resource=$(echo "$first_replaced" | tr ';' '\n' | grep -v '^$' | head -1)
+                                    if [ -n "$first_resource" ]; then
+                                        module_name=$(echo "${current_modules[0]}" | sed 's/\[/\\[/g; s/\]/\\]/g')
+                                        extract_resource_changes "$first_resource" "true" "$module_name"
+                                    fi
+                                fi
                             fi
                             # Destroyed resources
                             if [ -n "$first_destroyed" ]; then
@@ -468,11 +604,19 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                             if [ -n "${current_changed[0]}" ]; then
                                 echo "${current_changed[0]}" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource; do
                                     echo -e "      ${YELLOW}${resource}${NC}"
+                                    # Show detailed changes if -d flag is set
+                                    if [ "$SHOW_DETAILED_CHANGES" = true ]; then
+                                        extract_resource_changes "$resource" "false" ""
+                                    fi
                                 done
                             fi
                             if [ -n "${current_replaced[0]}" ]; then
                                 echo "${current_replaced[0]}" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource; do
                                     echo -e "      ${PINK}${resource}${NC}"
+                                    # Show detailed changes if -d flag is set
+                                    if [ "$SHOW_DETAILED_CHANGES" = true ]; then
+                                        extract_resource_changes "$resource" "false" ""
+                                    fi
                                 done
                             fi
                             if [ -n "${current_destroyed[0]}" ]; then
