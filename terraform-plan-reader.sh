@@ -7,7 +7,8 @@
 INPUT_FILE="terraform_plan.txt"
 LIMIT=0  # 0 means no limit (show all)
 GROUP_BY_MODULE=false
-GROUP_BY_ACTION_PATTERN=false
+SHOW_ALPHABETICAL=false
+SHOW_DETAILED_CHANGES=false
 
 # Parse command-line arguments
 while [[ $# -gt 0 ]]; do
@@ -25,7 +26,11 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -d|--detail)
-            GROUP_BY_ACTION_PATTERN=true
+            SHOW_DETAILED_CHANGES=true
+            shift
+            ;;
+        -a|--alphabetical)
+            SHOW_ALPHABETICAL=true
             shift
             ;;
         -h|--help)
@@ -33,15 +38,15 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  -l, --limit N         Limit output to N items per section (default: show all)"
-            echo "  -g, --group-by-module Group modules with identical action patterns"
-            echo "  -d, --detail          Show detailed changes for each module (use with -g)"
+            echo "  -g, --group-by-module Group modules with identical action patterns and show detailed changes"
+            echo "  -d, --detail          Show detailed parameter changes for resources"
+            echo "  -a, --alphabetical    Show alphabetically sorted list of all resources"
             echo "  -h, --help            Show this help message"
             echo ""
             echo "Examples:"
             echo "  $0 terraform_plan.txt"
             echo "  $0 --limit 20 terraform_plan.txt"
-            echo "  $0 --group-by-module terraform_plan.txt  # Group modules with same actions"
-            echo "  $0 -g -d terraform_plan.txt  # Group and show detailed changes"
+            echo "  $0 --group-by-module terraform_plan.txt  # Group modules with same actions and show details"
             echo "  $0 -l 50 -g"
             exit 0
             ;;
@@ -78,6 +83,91 @@ clean_line() {
     sed -E 's/\x1b\[[0-9;]*m//g'
 }
 
+# Function to extract detailed changes for a resource
+extract_resource_changes() {
+    local resource_name="$1"
+    local use_placeholder="${2:-false}"
+    local placeholder_module="$3"
+    
+    # Escape special characters for grep, but keep brackets for matching
+    local escaped_resource=$(echo "$resource_name" | sed 's/\[/\\[/g; s/\]/\\]/g; s/\./\\./g')
+    
+    # Find the resource block - look for the header line with various "will be" patterns
+    local start_line=$(grep -nE "  # ${escaped_resource} (will be|must be)" "$INPUT_FILE" | head -1 | cut -d: -f1)
+    
+    if [ -z "$start_line" ]; then
+        return
+    fi
+    
+    # Extract lines starting from the resource header until we hit the next resource or end of block
+    awk -v start="$start_line" -v resource="$escaped_resource" -v placeholder="$use_placeholder" -v module_name="$placeholder_module" '
+        BEGIN { 
+            in_block = 0
+            brace_count = 0
+            skip_next = 0
+        }
+        NR >= start {
+            # Detect start of resource block (various formats: "will be created", "will be updated", "must be replaced", etc.)
+            if (/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+Z [1m  # / && $0 ~ resource && (/(will be|must be)/)) {
+                in_block = 1
+                skip_next = 1
+                next
+            }
+            
+            # Skip the line after header (usually the reason line like "# (because ...)")
+            if (skip_next) {
+                skip_next = 0
+                # Skip reason lines
+                if (/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+Z   # \(because/) {
+                    next
+                }
+            }
+            
+            # Detect next resource (stop processing)
+            if (in_block && /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+Z [1m  # / && $0 !~ resource) {
+                exit
+            }
+            
+            if (in_block) {
+                # Track braces
+                brace_count += gsub(/{/, "&")
+                brace_count -= gsub(/}/, "&")
+                
+                # Extract change lines (those with +, -, ~, or ->)
+                line = $0
+                # Remove timestamp prefix
+                sub(/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+Z /, "", line)
+                # Remove ANSI codes
+                gsub(/\x1b\[[0-9;]*m/, "", line)
+                
+                # Check if this is a change line (has +, -, ~, or ->, or is a parameter line within the resource block)
+                if (line ~ /^[[:space:]]*[+-~]/ || line ~ /->/ || (line ~ /^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]*=/ && brace_count > 0)) {
+                    # Replace module name with placeholder if requested
+                    if (placeholder == "true" && module_name != "") {
+                        gsub(module_name, "{module}", line)
+                    }
+                    
+                    # Clean up and format - preserve some indentation
+                    # Remove excessive leading whitespace but keep structure
+                    sub(/^[[:space:]]{6,}/, "      ", line)
+                    # Skip comment-only lines and empty lines
+                    if (line !~ /^[[:space:]]*#/ && length(line) > 0) {
+                        # Only show lines with actual changes or parameter definitions
+                        if (line ~ /[+-~]/ || line ~ /->/ || line ~ /^[[:space:]]*[a-zA-Z_]/) {
+                            print "        " line
+                        }
+                    }
+                }
+                
+                # Stop when we exit the resource block (closing brace at root level)
+                if (brace_count < 0) {
+                    exit
+                }
+            }
+        }
+    ' "$INPUT_FILE"
+}
+
 # Extract and display summary
 echo -e "${BOLD}${CYAN}═══════════════════════════════════════════════════════════════${NC}"
 echo -e "${BOLD}${CYAN}  TERRAFORM PLAN SUMMARY${NC}"
@@ -103,6 +193,7 @@ fi
 # Count moves and extract moved resources
 MOVED_RESOURCES=""
 MOVE_COUNT=$(grep -c "has moved to" "$INPUT_FILE" 2>/dev/null || echo "0")
+MOVE_COUNT=$(echo "$MOVE_COUNT" | tr -d ' \n')
 if [ "$MOVE_COUNT" -gt 0 ]; then
     MOVED_RESOURCES=$(grep "has moved to" "$INPUT_FILE" | \
         clean_line | \
@@ -115,6 +206,7 @@ echo -e "${GREEN}Resources to add:${NC}    $ADD_COUNT"
 echo -e "${YELLOW}Resources to change:${NC}  $CHANGE_COUNT"
 # Count replaced resources for summary
 REPLACED_COUNT_SUMMARY=$(grep -cE "must be.*replaced|will be.*replaced" "$INPUT_FILE" 2>/dev/null || echo "0")
+REPLACED_COUNT_SUMMARY=$(echo "$REPLACED_COUNT_SUMMARY" | tr -d ' \n')
 if [ "$REPLACED_COUNT_SUMMARY" -gt 0 ]; then
     echo -e "${PINK}Resources to replace:${NC} $REPLACED_COUNT_SUMMARY"
 fi
@@ -165,11 +257,27 @@ CHANGED_RESOURCES=$(grep -E "will be updated" "$INPUT_FILE" | \
     sort -u)
 if [ -n "$CHANGED_RESOURCES" ]; then
     CHANGED_COUNT=$(echo "$CHANGED_RESOURCES" | grep -v '^$' | wc -l | tr -d ' ')
-    DISPLAYED=$(echo "$CHANGED_RESOURCES" | apply_limit | sed 's/^/  /')
-    echo "$DISPLAYED"
-    if [ "$LIMIT" -gt 0 ] && [ "$CHANGED_COUNT" -gt "$LIMIT" ]; then
-        REMAINING=$((CHANGED_COUNT - LIMIT))
-        echo -e "${CYAN}  ... and $REMAINING more${NC}"
+    if [ "$SHOW_DETAILED_CHANGES" = true ]; then
+        # Show detailed changes for each resource
+        echo "$CHANGED_RESOURCES" | apply_limit | while IFS= read -r resource; do
+            if [ -z "$resource" ]; then
+                continue
+            fi
+            echo -e "  ${YELLOW}${resource}${NC}"
+            extract_resource_changes "$resource" "false" ""
+            echo ""
+        done
+        if [ "$LIMIT" -gt 0 ] && [ "$CHANGED_COUNT" -gt "$LIMIT" ]; then
+            REMAINING=$((CHANGED_COUNT - LIMIT))
+            echo -e "${CYAN}  ... and $REMAINING more${NC}"
+        fi
+    else
+        DISPLAYED=$(echo "$CHANGED_RESOURCES" | apply_limit | sed 's/^/  /')
+        echo "$DISPLAYED"
+        if [ "$LIMIT" -gt 0 ] && [ "$CHANGED_COUNT" -gt "$LIMIT" ]; then
+            REMAINING=$((CHANGED_COUNT - LIMIT))
+            echo -e "${CYAN}  ... and $REMAINING more${NC}"
+        fi
     fi
 else
     echo "  (none)"
@@ -186,11 +294,27 @@ REPLACED_RESOURCES=$(grep -E "must be.*replaced|will be.*replaced" "$INPUT_FILE"
     sort -u)
 if [ -n "$REPLACED_RESOURCES" ]; then
     REPLACED_COUNT=$(echo "$REPLACED_RESOURCES" | grep -v '^$' | wc -l | tr -d ' ')
-    DISPLAYED=$(echo "$REPLACED_RESOURCES" | apply_limit | sed 's/^/  /')
-    echo "$DISPLAYED"
-    if [ "$LIMIT" -gt 0 ] && [ "$REPLACED_COUNT" -gt "$LIMIT" ]; then
-        REMAINING=$((REPLACED_COUNT - LIMIT))
-        echo -e "${CYAN}  ... and $REMAINING more${NC}"
+    if [ "$SHOW_DETAILED_CHANGES" = true ]; then
+        # Show detailed changes for each resource
+        echo "$REPLACED_RESOURCES" | apply_limit | while IFS= read -r resource; do
+            if [ -z "$resource" ]; then
+                continue
+            fi
+            echo -e "  ${PINK}${resource}${NC}"
+            extract_resource_changes "$resource" "false" ""
+            echo ""
+        done
+        if [ "$LIMIT" -gt 0 ] && [ "$REPLACED_COUNT" -gt "$LIMIT" ]; then
+            REMAINING=$((REPLACED_COUNT - LIMIT))
+            echo -e "${CYAN}  ... and $REMAINING more${NC}"
+        fi
+    else
+        DISPLAYED=$(echo "$REPLACED_RESOURCES" | apply_limit | sed 's/^/  /')
+        echo "$DISPLAYED"
+        if [ "$LIMIT" -gt 0 ] && [ "$REPLACED_COUNT" -gt "$LIMIT" ]; then
+            REMAINING=$((REPLACED_COUNT - LIMIT))
+            echo -e "${CYAN}  ... and $REMAINING more${NC}"
+        fi
     fi
 else
     echo "  (none)"
@@ -234,49 +358,45 @@ if [ "$MOVE_COUNT" -gt 0 ]; then
     fi
 fi
 
-# Combine all resources and sort alphabetically with color coding
-echo ""
-echo -e "${BOLD}${CYAN}ALL RESOURCES (ALPHABETICALLY SORTED):${NC}"
-echo ""
-ALL_RESOURCES=$(printf "%s\n%s\n%s\n%s\n%s\n" \
-    "$CREATED_RESOURCES" \
-    "$CHANGED_RESOURCES" \
-    "$REPLACED_RESOURCES" \
-    "$DESTROYED_RESOURCES" \
-    "$MOVED_RESOURCES" | \
-    grep -v '^$' | \
-    sort -u)
-if [ -n "$ALL_RESOURCES" ]; then
-    ALL_COUNT=$(echo "$ALL_RESOURCES" | grep -v '^$' | wc -l | tr -d ' ')
-    
-    # Color-code each resource based on its category
-    echo "$ALL_RESOURCES" | apply_limit | while IFS= read -r resource; do
-        if [ -z "$resource" ]; then
-            continue
-        fi
-        
-        # Determine color based on which list the resource belongs to
-        COLOR="${NC}"  # Default: no color
-        if echo "$CREATED_RESOURCES" | grep -Fxq "$resource"; then
-            COLOR="${GREEN}"
-        elif echo "$REPLACED_RESOURCES" | grep -Fxq "$resource"; then
-            COLOR="${PINK}"
-        elif echo "$CHANGED_RESOURCES" | grep -Fxq "$resource"; then
-            COLOR="${YELLOW}"
-        elif echo "$DESTROYED_RESOURCES" | grep -Fxq "$resource"; then
-            COLOR="${RED}"
-        elif [ -n "$MOVED_RESOURCES" ] && echo "$MOVED_RESOURCES" | grep -Fxq "$resource"; then
-            COLOR="${BLUE}"
-        fi
-        
-        echo -e "${COLOR}  ${resource}${NC}"
-    done
-    if [ "$LIMIT" -gt 0 ] && [ "$ALL_COUNT" -gt "$LIMIT" ]; then
-        REMAINING=$((ALL_COUNT - LIMIT))
-        echo -e "${CYAN}  ... and $REMAINING more${NC}"
+# Combine all resources and sort alphabetically with color coding (only if -a flag is set)
+if [ "$SHOW_ALPHABETICAL" = true ]; then
+    echo ""
+    echo -e "${BOLD}${CYAN}ALL RESOURCES (ALPHABETICALLY SORTED):${NC}"
+    echo ""
+    ALL_RESOURCES=$(printf "%s\n%s\n%s\n%s\n%s\n" \
+        "$CREATED_RESOURCES" \
+        "$CHANGED_RESOURCES" \
+        "$REPLACED_RESOURCES" \
+        "$DESTROYED_RESOURCES" \
+        "$MOVED_RESOURCES" | \
+        grep -v '^$' | \
+        sort -u)
+    if [ -n "$ALL_RESOURCES" ]; then
+        # Color-code each resource based on its category (not affected by -l limit)
+        echo "$ALL_RESOURCES" | while IFS= read -r resource; do
+            if [ -z "$resource" ]; then
+                continue
+            fi
+            
+            # Determine color based on which list the resource belongs to
+            COLOR="${NC}"  # Default: no color
+            if echo "$CREATED_RESOURCES" | grep -Fxq "$resource"; then
+                COLOR="${GREEN}"
+            elif echo "$REPLACED_RESOURCES" | grep -Fxq "$resource"; then
+                COLOR="${PINK}"
+            elif echo "$CHANGED_RESOURCES" | grep -Fxq "$resource"; then
+                COLOR="${YELLOW}"
+            elif echo "$DESTROYED_RESOURCES" | grep -Fxq "$resource"; then
+                COLOR="${RED}"
+            elif [ -n "$MOVED_RESOURCES" ] && echo "$MOVED_RESOURCES" | grep -Fxq "$resource"; then
+                COLOR="${BLUE}"
+            fi
+            
+            echo -e "${COLOR}  ${resource}${NC}"
+        done
+    else
+        echo "  (none)"
     fi
-else
-    echo "  (none)"
 fi
 
 # Group by module if requested
@@ -408,8 +528,8 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                         for mod in "${current_modules[@]}"; do
                             echo -e "    - ${mod}"
                         done
-                        # Show details if -d flag is set
-                        if [ "$GROUP_BY_ACTION_PATTERN" = true ]; then
+                        # Show details when -g flag is set
+                        if [ "$GROUP_BY_MODULE" = true ]; then
                             # Use resources from first module as template, show once with placeholder notation
                             first_created="${current_created[0]}"
                             first_changed="${current_changed[0]}"
@@ -432,6 +552,15 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                                     resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
                                     echo -e "      ${YELLOW}{module}.${resource_suffix}${NC}"
                                 done
+                                # Show detailed changes if -d flag is set (show once for the group using first resource as template)
+                                if [ "$SHOW_DETAILED_CHANGES" = true ] && [ -n "${current_modules[0]}" ]; then
+                                    first_resource=$(echo "$first_changed" | tr ';' '\n' | grep -v '^$' | head -1)
+                                    if [ -n "$first_resource" ]; then
+                                        # Extract module name for placeholder replacement
+                                        module_name=$(echo "${current_modules[0]}" | sed 's/\[/\\[/g; s/\]/\\]/g')
+                                        extract_resource_changes "$first_resource" "true" "$module_name"
+                                    fi
+                                fi
                             fi
                             # Replaced resources
                             if [ -n "$first_replaced" ]; then
@@ -439,6 +568,14 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                                     resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
                                     echo -e "      ${PINK}{module}.${resource_suffix}${NC}"
                                 done
+                                # Show detailed changes if -d flag is set
+                                if [ "$SHOW_DETAILED_CHANGES" = true ] && [ -n "${current_modules[0]}" ]; then
+                                    first_resource=$(echo "$first_replaced" | tr ';' '\n' | grep -v '^$' | head -1)
+                                    if [ -n "$first_resource" ]; then
+                                        module_name=$(echo "${current_modules[0]}" | sed 's/\[/\\[/g; s/\]/\\]/g')
+                                        extract_resource_changes "$first_resource" "true" "$module_name"
+                                    fi
+                                fi
                             fi
                             # Destroyed resources
                             if [ -n "$first_destroyed" ]; then
@@ -457,8 +594,8 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                         fi
                     else
                         echo -e "  ${BOLD}${current_modules[0]}${NC}: $current_summary"
-                        # Show details for single module if -d flag is set
-                        if [ "$GROUP_BY_ACTION_PATTERN" = true ]; then
+                        # Show details for single module when -g flag is set
+                        if [ "$GROUP_BY_MODULE" = true ]; then
                             if [ -n "${current_created[0]}" ]; then
                                 echo "${current_created[0]}" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource; do
                                     echo -e "      ${GREEN}${resource}${NC}"
@@ -467,11 +604,19 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                             if [ -n "${current_changed[0]}" ]; then
                                 echo "${current_changed[0]}" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource; do
                                     echo -e "      ${YELLOW}${resource}${NC}"
+                                    # Show detailed changes if -d flag is set
+                                    if [ "$SHOW_DETAILED_CHANGES" = true ]; then
+                                        extract_resource_changes "$resource" "false" ""
+                                    fi
                                 done
                             fi
                             if [ -n "${current_replaced[0]}" ]; then
                                 echo "${current_replaced[0]}" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource; do
                                     echo -e "      ${PINK}${resource}${NC}"
+                                    # Show detailed changes if -d flag is set
+                                    if [ "$SHOW_DETAILED_CHANGES" = true ]; then
+                                        extract_resource_changes "$resource" "false" ""
+                                    fi
                                 done
                             fi
                             if [ -n "${current_destroyed[0]}" ]; then
@@ -516,8 +661,8 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                 for mod in "${current_modules[@]}"; do
                     echo -e "    - ${mod}"
                 done
-                # Show details if -d flag is set
-                if [ "$GROUP_BY_ACTION_PATTERN" = true ]; then
+                # Show details when -g flag is set
+                if [ "$GROUP_BY_MODULE" = true ]; then
                     first_created="${current_created[0]}"
                     first_changed="${current_changed[0]}"
                     first_replaced="${current_replaced[0]}"
@@ -557,7 +702,7 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                 fi
             else
                 echo -e "  ${BOLD}${current_modules[0]}${NC}: $current_summary"
-                if [ "$GROUP_BY_ACTION_PATTERN" = true ]; then
+                if [ "$GROUP_BY_MODULE" = true ]; then
                     if [ -n "${current_created[0]}" ]; then
                         echo "${current_created[0]}" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource; do
                             echo -e "      ${GREEN}${resource}${NC}"
