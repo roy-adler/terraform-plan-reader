@@ -7,7 +7,6 @@
 INPUT_FILE="terraform_plan.txt"
 LIMIT=0  # 0 means no limit (show all)
 GROUP_BY_MODULE=false
-GROUP_BY_ACTION_PATTERN=false
 SHOW_ALPHABETICAL=false
 
 # Parse command-line arguments
@@ -26,7 +25,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -d|--detail)
-            GROUP_BY_ACTION_PATTERN=true
+            # Reserved for future use
             shift
             ;;
         -a|--alphabetical)
@@ -38,16 +37,15 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  -l, --limit N         Limit output to N items per section (default: show all)"
-            echo "  -g, --group-by-module Group modules with identical action patterns"
-            echo "  -d, --detail          Show detailed changes for each module (use with -g)"
+            echo "  -g, --group-by-module Group modules with identical action patterns and show detailed changes"
+            echo "  -d, --detail          Reserved for future use"
             echo "  -a, --alphabetical    Show alphabetically sorted list of all resources"
             echo "  -h, --help            Show this help message"
             echo ""
             echo "Examples:"
             echo "  $0 terraform_plan.txt"
             echo "  $0 --limit 20 terraform_plan.txt"
-            echo "  $0 --group-by-module terraform_plan.txt  # Group modules with same actions"
-            echo "  $0 -g -d terraform_plan.txt  # Group and show detailed changes"
+            echo "  $0 --group-by-module terraform_plan.txt  # Group modules with same actions and show details"
             echo "  $0 -l 50 -g"
             exit 0
             ;;
@@ -411,8 +409,8 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                         for mod in "${current_modules[@]}"; do
                             echo -e "    - ${mod}"
                         done
-                        # Show details if -d flag is set
-                        if [ "$GROUP_BY_ACTION_PATTERN" = true ]; then
+                        # Show details when -g flag is set
+                        if [ "$GROUP_BY_MODULE" = true ]; then
                             # Use resources from first module as template, show once with placeholder notation
                             first_created="${current_created[0]}"
                             first_changed="${current_changed[0]}"
@@ -460,8 +458,8 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                         fi
                     else
                         echo -e "  ${BOLD}${current_modules[0]}${NC}: $current_summary"
-                        # Show details for single module if -d flag is set
-                        if [ "$GROUP_BY_ACTION_PATTERN" = true ]; then
+                        # Show details for single module when -g flag is set
+                        if [ "$GROUP_BY_MODULE" = true ]; then
                             if [ -n "${current_created[0]}" ]; then
                                 echo "${current_created[0]}" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource; do
                                     echo -e "      ${GREEN}${resource}${NC}"
@@ -519,8 +517,8 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                 for mod in "${current_modules[@]}"; do
                     echo -e "    - ${mod}"
                 done
-                # Show details if -d flag is set
-                if [ "$GROUP_BY_ACTION_PATTERN" = true ]; then
+                # Show details when -g flag is set
+                if [ "$GROUP_BY_MODULE" = true ]; then
                     first_created="${current_created[0]}"
                     first_changed="${current_changed[0]}"
                     first_replaced="${current_replaced[0]}"
@@ -560,7 +558,7 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                 fi
             else
                 echo -e "  ${BOLD}${current_modules[0]}${NC}: $current_summary"
-                if [ "$GROUP_BY_ACTION_PATTERN" = true ]; then
+                if [ "$GROUP_BY_MODULE" = true ]; then
                     if [ -n "${current_created[0]}" ]; then
                         echo "${current_created[0]}" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource; do
                             echo -e "      ${GREEN}${resource}${NC}"
