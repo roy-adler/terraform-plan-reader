@@ -16,12 +16,13 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         -l|--limit)
             SHOW_LISTS=true
-            LIMIT="$2"
-            if ! [[ "$LIMIT" =~ ^[0-9]+$ ]]; then
-                echo "Error: Limit must be a positive number" >&2
-                exit 1
+            # Check if next argument is a number, if so use it, otherwise keep default 0
+            if [[ "$2" =~ ^[0-9]+$ ]]; then
+                LIMIT="$2"
+                shift 2
+            else
+                shift
             fi
-            shift 2
             ;;
         -g|--group-by-module)
             GROUP_BY_MODULE=true
