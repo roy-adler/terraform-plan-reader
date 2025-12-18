@@ -48,9 +48,10 @@ If no file is specified, it defaults to `terraform_plan.txt`:
 
 ### Options
 
-- `-l, --limit N`: Limit output to N items per section (default: show all)
-- `-g, --group-by-module`: Group modules with identical action patterns together
-- `-d, --detail`: Show detailed changes for each module (use with `-g`)
+- `-l, --limit N`: Show categorized lists with N items per section (0 or omit N = show all). Without this flag, only the summary is shown.
+- `-g, --group-by-module`: Group modules with identical action patterns together and show detailed changes
+- `-d, --detail`: Show detailed parameter changes for resources
+- `-a, --alphabetical`: Show alphabetically sorted list of all resources
 - `-h, --help`: Display help message
 
 ### Examples
@@ -67,6 +68,9 @@ If no file is specified, it defaults to `terraform_plan.txt`:
 
 # Group modules and show detailed changes
 ./terraform-plan-reader.sh -g -d terraform_plan.txt
+
+# Show alphabetically sorted list
+./terraform-plan-reader.sh -a terraform_plan.txt
 
 # Combine options
 ./terraform-plan-reader.sh -l 50 -g terraform_plan.txt
