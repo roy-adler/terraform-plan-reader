@@ -5,6 +5,7 @@
 # Default values
 INPUT_FILE="terraform_plan.txt"
 LIMIT=0  # 0 means no limit (show all)
+SHOW_LISTS=false  # Whether to show categorized lists at all
 GROUP_BY_MODULE=false
 SHOW_ALPHABETICAL=false
 SHOW_DETAILED_CHANGES=false
@@ -13,12 +14,14 @@ SHOW_DETAILED_CHANGES=false
 while [[ $# -gt 0 ]]; do
     case $1 in
         -l|--limit)
-            LIMIT="$2"
-            if ! [[ "$LIMIT" =~ ^[0-9]+$ ]]; then
-                echo "Error: Limit must be a positive number" >&2
-                exit 1
+            SHOW_LISTS=true
+            # Check if next argument is a number, if so use it, otherwise keep default 0
+            if [[ "$2" =~ ^[0-9]+$ ]]; then
+                LIMIT="$2"
+                shift 2
+            else
+                shift
             fi
-            shift 2
             ;;
         -g|--group-by-module)
             GROUP_BY_MODULE=true
@@ -36,7 +39,7 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: $0 [OPTIONS] [FILE]"
             echo ""
             echo "Options:"
-            echo "  -l, --limit N         Limit output to N items per section (default: show all)"
+            echo "  -l, --limit N         Show categorized lists with N items per section (0 = show all)"
             echo "  -g, --group-by-module Group modules with identical action patterns and show detailed changes"
             echo "  -d, --detail          Show detailed parameter changes for resources"
             echo "  -a, --alphabetical    Show alphabetically sorted list of all resources"
@@ -235,134 +238,138 @@ apply_limit() {
     fi
 }
 
-# Extract resource names - look for lines with "# resource_name" will be created/destroyed/modified
-echo -e "${BOLD}${GREEN}RESOURCES TO BE CREATED:${NC}"
-echo ""
+# Extract resource names for later use (needed by alphabetical list and group-by-module)
 CREATED_RESOURCES=$(grep "will be created" "$INPUT_FILE" | \
     clean_line | \
     sed -E 's/^[[:space:]]*#[[:space:]]*//' | \
     sed -E 's/[[:space:]]*will be created.*$//' | \
     sort -u)
-if [ -n "$CREATED_RESOURCES" ]; then
-    CREATED_COUNT=$(echo "$CREATED_RESOURCES" | grep -v '^$' | wc -l | tr -d ' ')
-    DISPLAYED=$(echo "$CREATED_RESOURCES" | apply_limit | sed 's/^/  /')
-    echo "$DISPLAYED"
-    if [ "$LIMIT" -gt 0 ] && [ "$CREATED_COUNT" -gt "$LIMIT" ]; then
-        REMAINING=$((CREATED_COUNT - LIMIT))
-        echo -e "${CYAN}  ... and $REMAINING more${NC}"
-    fi
-else
-    echo "  (none)"
-fi
-
-echo ""
-echo -e "${BOLD}${YELLOW}RESOURCES TO BE MODIFIED/CHANGED:${NC}"
-echo ""
 CHANGED_RESOURCES=$(grep -E "will be updated" "$INPUT_FILE" | \
     clean_line | \
     sed -E 's/^[[:space:]]*#[[:space:]]*//' | \
     sed -E 's/[[:space:]]*will be updated.*$//' | \
     sort -u)
-if [ -n "$CHANGED_RESOURCES" ]; then
-    CHANGED_COUNT=$(echo "$CHANGED_RESOURCES" | grep -v '^$' | wc -l | tr -d ' ')
-    if [ "$SHOW_DETAILED_CHANGES" = true ]; then
-        # Show detailed changes for each resource
-        echo "$CHANGED_RESOURCES" | apply_limit | while IFS= read -r resource; do
-            if [ -z "$resource" ]; then
-                continue
-            fi
-            echo -e "  ${YELLOW}${resource}${NC}"
-            extract_resource_changes "$resource" "false" ""
-            echo ""
-        done
-        if [ "$LIMIT" -gt 0 ] && [ "$CHANGED_COUNT" -gt "$LIMIT" ]; then
-            REMAINING=$((CHANGED_COUNT - LIMIT))
-            echo -e "${CYAN}  ... and $REMAINING more${NC}"
-        fi
-    else
-        DISPLAYED=$(echo "$CHANGED_RESOURCES" | apply_limit | sed 's/^/  /')
-        echo "$DISPLAYED"
-        if [ "$LIMIT" -gt 0 ] && [ "$CHANGED_COUNT" -gt "$LIMIT" ]; then
-            REMAINING=$((CHANGED_COUNT - LIMIT))
-            echo -e "${CYAN}  ... and $REMAINING more${NC}"
-        fi
-    fi
-else
-    echo "  (none)"
-fi
-
-echo ""
-echo -e "${BOLD}${PINK}RESOURCES TO BE REPLACED:${NC}"
-echo ""
 REPLACED_RESOURCES=$(grep -E "must be.*replaced|will be.*replaced" "$INPUT_FILE" | \
     clean_line | \
     sed -E 's/^[[:space:]]*#[[:space:]]*//' | \
     sed -E 's/[[:space:]]*must be.*replaced.*$//' | \
     sed -E 's/[[:space:]]*will be.*replaced.*$//' | \
     sort -u)
-if [ -n "$REPLACED_RESOURCES" ]; then
-    REPLACED_COUNT=$(echo "$REPLACED_RESOURCES" | grep -v '^$' | wc -l | tr -d ' ')
-    if [ "$SHOW_DETAILED_CHANGES" = true ]; then
-        # Show detailed changes for each resource
-        echo "$REPLACED_RESOURCES" | apply_limit | while IFS= read -r resource; do
-            if [ -z "$resource" ]; then
-                continue
-            fi
-            echo -e "  ${PINK}${resource}${NC}"
-            extract_resource_changes "$resource" "false" ""
-            echo ""
-        done
-        if [ "$LIMIT" -gt 0 ] && [ "$REPLACED_COUNT" -gt "$LIMIT" ]; then
-            REMAINING=$((REPLACED_COUNT - LIMIT))
-            echo -e "${CYAN}  ... and $REMAINING more${NC}"
-        fi
-    else
-        DISPLAYED=$(echo "$REPLACED_RESOURCES" | apply_limit | sed 's/^/  /')
-        echo "$DISPLAYED"
-        if [ "$LIMIT" -gt 0 ] && [ "$REPLACED_COUNT" -gt "$LIMIT" ]; then
-            REMAINING=$((REPLACED_COUNT - LIMIT))
-            echo -e "${CYAN}  ... and $REMAINING more${NC}"
-        fi
-    fi
-else
-    echo "  (none)"
-fi
-
-echo ""
-echo -e "${BOLD}${RED}RESOURCES TO BE DESTROYED:${NC}"
-echo ""
 DESTROYED_RESOURCES=$(grep -E "will be.*destroyed|\[31mdestroyed" "$INPUT_FILE" | \
     clean_line | \
     sed -E 's/^[[:space:]]*#[[:space:]]*//' | \
     sed -E 's/[[:space:]]*will be.*destroyed.*$//' | \
     sed -E 's/[[:space:]]*\(because.*$//' | \
     sort -u)
-if [ -n "$DESTROYED_RESOURCES" ]; then
-    DESTROYED_COUNT=$(echo "$DESTROYED_RESOURCES" | grep -v '^$' | wc -l | tr -d ' ')
-    DISPLAYED=$(echo "$DESTROYED_RESOURCES" | apply_limit | sed 's/^/  /')
-    echo "$DISPLAYED"
-    if [ "$LIMIT" -gt 0 ] && [ "$DESTROYED_COUNT" -gt "$LIMIT" ]; then
-        REMAINING=$((DESTROYED_COUNT - LIMIT))
-        echo -e "${CYAN}  ... and $REMAINING more${NC}"
-    fi
-else
-    echo "  (none)"
-fi
 
-if [ "$MOVE_COUNT" -gt 0 ]; then
+# Show categorized lists only if -l flag was provided
+if [ "$SHOW_LISTS" = true ]; then
+    echo -e "${BOLD}${GREEN}RESOURCES TO BE CREATED:${NC}"
     echo ""
-    echo -e "${BOLD}${BLUE}RESOURCES TO BE MOVED:${NC}"
-    echo ""
-    if [ -n "$MOVED_RESOURCES" ]; then
-        MOVED_DISPLAY_COUNT=$(echo "$MOVED_RESOURCES" | grep -v '^$' | wc -l | tr -d ' ')
-        DISPLAYED=$(echo "$MOVED_RESOURCES" | apply_limit | sed 's/^/  /')
+    if [ -n "$CREATED_RESOURCES" ]; then
+        CREATED_COUNT=$(echo "$CREATED_RESOURCES" | grep -v '^$' | wc -l | tr -d ' ')
+        DISPLAYED=$(echo "$CREATED_RESOURCES" | apply_limit | sed 's/^/  /')
         echo "$DISPLAYED"
-        if [ "$LIMIT" -gt 0 ] && [ "$MOVED_DISPLAY_COUNT" -gt "$LIMIT" ]; then
-            REMAINING=$((MOVED_DISPLAY_COUNT - LIMIT))
+        if [ "$LIMIT" -gt 0 ] && [ "$CREATED_COUNT" -gt "$LIMIT" ]; then
+            REMAINING=$((CREATED_COUNT - LIMIT))
             echo -e "${CYAN}  ... and $REMAINING more${NC}"
         fi
     else
         echo "  (none)"
+    fi
+
+    echo ""
+    echo -e "${BOLD}${YELLOW}RESOURCES TO BE MODIFIED/CHANGED:${NC}"
+    echo ""
+    if [ -n "$CHANGED_RESOURCES" ]; then
+        CHANGED_COUNT=$(echo "$CHANGED_RESOURCES" | grep -v '^$' | wc -l | tr -d ' ')
+        if [ "$SHOW_DETAILED_CHANGES" = true ]; then
+            # Show detailed changes for each resource
+            echo "$CHANGED_RESOURCES" | apply_limit | while IFS= read -r resource; do
+                if [ -z "$resource" ]; then
+                    continue
+                fi
+                echo -e "  ${YELLOW}${resource}${NC}"
+                extract_resource_changes "$resource" "false" ""
+                echo ""
+            done
+            if [ "$LIMIT" -gt 0 ] && [ "$CHANGED_COUNT" -gt "$LIMIT" ]; then
+                REMAINING=$((CHANGED_COUNT - LIMIT))
+                echo -e "${CYAN}  ... and $REMAINING more${NC}"
+            fi
+        else
+            DISPLAYED=$(echo "$CHANGED_RESOURCES" | apply_limit | sed 's/^/  /')
+            echo "$DISPLAYED"
+            if [ "$LIMIT" -gt 0 ] && [ "$CHANGED_COUNT" -gt "$LIMIT" ]; then
+                REMAINING=$((CHANGED_COUNT - LIMIT))
+                echo -e "${CYAN}  ... and $REMAINING more${NC}"
+            fi
+        fi
+    else
+        echo "  (none)"
+    fi
+
+    echo ""
+    echo -e "${BOLD}${PINK}RESOURCES TO BE REPLACED:${NC}"
+    echo ""
+    if [ -n "$REPLACED_RESOURCES" ]; then
+        REPLACED_COUNT=$(echo "$REPLACED_RESOURCES" | grep -v '^$' | wc -l | tr -d ' ')
+        if [ "$SHOW_DETAILED_CHANGES" = true ]; then
+            # Show detailed changes for each resource
+            echo "$REPLACED_RESOURCES" | apply_limit | while IFS= read -r resource; do
+                if [ -z "$resource" ]; then
+                    continue
+                fi
+                echo -e "  ${PINK}${resource}${NC}"
+                extract_resource_changes "$resource" "false" ""
+                echo ""
+            done
+            if [ "$LIMIT" -gt 0 ] && [ "$REPLACED_COUNT" -gt "$LIMIT" ]; then
+                REMAINING=$((REPLACED_COUNT - LIMIT))
+                echo -e "${CYAN}  ... and $REMAINING more${NC}"
+            fi
+        else
+            DISPLAYED=$(echo "$REPLACED_RESOURCES" | apply_limit | sed 's/^/  /')
+            echo "$DISPLAYED"
+            if [ "$LIMIT" -gt 0 ] && [ "$REPLACED_COUNT" -gt "$LIMIT" ]; then
+                REMAINING=$((REPLACED_COUNT - LIMIT))
+                echo -e "${CYAN}  ... and $REMAINING more${NC}"
+            fi
+        fi
+    else
+        echo "  (none)"
+    fi
+
+    echo ""
+    echo -e "${BOLD}${RED}RESOURCES TO BE DESTROYED:${NC}"
+    echo ""
+    if [ -n "$DESTROYED_RESOURCES" ]; then
+        DESTROYED_COUNT=$(echo "$DESTROYED_RESOURCES" | grep -v '^$' | wc -l | tr -d ' ')
+        DISPLAYED=$(echo "$DESTROYED_RESOURCES" | apply_limit | sed 's/^/  /')
+        echo "$DISPLAYED"
+        if [ "$LIMIT" -gt 0 ] && [ "$DESTROYED_COUNT" -gt "$LIMIT" ]; then
+            REMAINING=$((DESTROYED_COUNT - LIMIT))
+            echo -e "${CYAN}  ... and $REMAINING more${NC}"
+        fi
+    else
+        echo "  (none)"
+    fi
+
+    if [ "$MOVE_COUNT" -gt 0 ]; then
+        echo ""
+        echo -e "${BOLD}${BLUE}RESOURCES TO BE MOVED:${NC}"
+        echo ""
+        if [ -n "$MOVED_RESOURCES" ]; then
+            MOVED_DISPLAY_COUNT=$(echo "$MOVED_RESOURCES" | grep -v '^$' | wc -l | tr -d ' ')
+            DISPLAYED=$(echo "$MOVED_RESOURCES" | apply_limit | sed 's/^/  /')
+            echo "$DISPLAYED"
+            if [ "$LIMIT" -gt 0 ] && [ "$MOVED_DISPLAY_COUNT" -gt "$LIMIT" ]; then
+                REMAINING=$((MOVED_DISPLAY_COUNT - LIMIT))
+                echo -e "${CYAN}  ... and $REMAINING more${NC}"
+            fi
+        else
+            echo "  (none)"
+        fi
     fi
 fi
 
