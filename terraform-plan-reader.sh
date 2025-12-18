@@ -1,7 +1,6 @@
 #!/bin/bash
 
 # Terraform Plan Reader
-# Makes terraform plan output more human-readable
 
 # Default values
 INPUT_FILE="terraform_plan.txt"
@@ -95,23 +94,30 @@ extract_resource_changes() {
     # Escape special characters for grep, but keep brackets for matching
     local escaped_resource=$(echo "$resource_name" | sed 's/\[/\\[/g; s/\]/\\]/g; s/\./\\./g')
     
-    # Find the resource block - look for the header line with various "will be" patterns
-    local start_line=$(grep -nE "  # ${escaped_resource} (will be|must be)" "$INPUT_FILE" | head -1 | cut -d: -f1)
+    # Find the resource block - strip ANSI codes first, then search for the header line
+    local start_line=$(sed 's/\x1b\[[0-9;]*m//g' "$INPUT_FILE" | grep -nE "  # ${escaped_resource} (will be|must be)" | head -1 | cut -d: -f1)
     
     if [ -z "$start_line" ]; then
         return
     fi
     
     # Extract lines starting from the resource header until we hit the next resource or end of block
-    awk -v start="$start_line" -v resource="$escaped_resource" -v placeholder="$use_placeholder" -v module_name="$placeholder_module" '
+    awk -v start="$start_line" -v resource="$resource_name" -v placeholder="$use_placeholder" -v module_name="$placeholder_module" '
         BEGIN { 
             in_block = 0
             brace_count = 0
             skip_next = 0
         }
         NR >= start {
+            # Clean line for pattern matching (remove timestamp, ANSI codes, and CR)
+            clean = $0
+            gsub(/\r/, "", clean)
+            sub(/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+Z /, "", clean)
+            gsub(/\x1b\[[0-9;]*m/, "", clean)
+            
             # Detect start of resource block (various formats: "will be created", "will be updated", "must be replaced", etc.)
-            if (/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+Z [1m  # / && $0 ~ resource && (/(will be|must be)/)) {
+            # Use index() for literal string matching instead of regex
+            if (clean ~ /^  # / && index(clean, resource) > 0 && clean ~ /(will be|must be)/) {
                 in_block = 1
                 skip_next = 1
                 next
@@ -120,14 +126,14 @@ extract_resource_changes() {
             # Skip the line after header (usually the reason line like "# (because ...)")
             if (skip_next) {
                 skip_next = 0
-                # Skip reason lines
-                if (/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+Z   # \(because/) {
+                # Skip reason lines and moved-from lines
+                if (clean ~ /^  # \(because/ || clean ~ /^  # \(moved from/) {
                     next
                 }
             }
             
-            # Detect next resource (stop processing)
-            if (in_block && /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+Z [1m  # / && $0 !~ resource) {
+            # Detect next resource (stop processing) - any other resource header
+            if (in_block && clean ~ /^  # / && index(clean, resource) == 0 && clean ~ /(will be|must be)/) {
                 exit
             }
             
@@ -138,16 +144,18 @@ extract_resource_changes() {
                 
                 # Extract change lines (those with +, -, ~, or ->)
                 line = $0
-                # Remove timestamp prefix
+                # Remove CR, timestamp prefix, and ANSI codes
+                gsub(/\r/, "", line)
                 sub(/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+Z /, "", line)
-                # Remove ANSI codes
                 gsub(/\x1b\[[0-9;]*m/, "", line)
                 
                 # Check if this is a change line (has +, -, ~, or ->, or is a parameter line within the resource block)
                 if (line ~ /^[[:space:]]*[+-~]/ || line ~ /->/ || (line ~ /^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]*=/ && brace_count > 0)) {
-                    # Replace module name with placeholder if requested
+                    # Replace module name with placeholder if requested (literal string replacement)
                     if (placeholder == "true" && module_name != "") {
-                        gsub(module_name, "{module}", line)
+                        while ((idx = index(line, module_name)) > 0) {
+                            line = substr(line, 1, idx-1) "{module}" substr(line, idx + length(module_name))
+                        }
                     }
                     
                     # Clean up and format - preserve some indentation
@@ -551,6 +559,10 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                                     resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
                                     # Show once with placeholder notation
                                     echo -e "      ${GREEN}{module}.${resource_suffix}${NC}"
+                                    # Show detailed changes if -d flag is set
+                                    if [ "$SHOW_DETAILED_CHANGES" = true ] && [ -n "${current_modules[0]}" ]; then
+                                        extract_resource_changes "$resource_template" "true" "${current_modules[0]}"
+                                    fi
                                 done
                             fi
                             # Changed resources
@@ -558,31 +570,22 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                                 echo "$first_changed" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource_template; do
                                     resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
                                     echo -e "      ${YELLOW}{module}.${resource_suffix}${NC}"
-                                done
-                                # Show detailed changes if -d flag is set (show once for the group using first resource as template)
-                                if [ "$SHOW_DETAILED_CHANGES" = true ] && [ -n "${current_modules[0]}" ]; then
-                                    first_resource=$(echo "$first_changed" | tr ';' '\n' | grep -v '^$' | head -1)
-                                    if [ -n "$first_resource" ]; then
-                                        # Extract module name for placeholder replacement
-                                        module_name=$(echo "${current_modules[0]}" | sed 's/\[/\\[/g; s/\]/\\]/g')
-                                        extract_resource_changes "$first_resource" "true" "$module_name"
+                                    # Show detailed changes if -d flag is set
+                                    if [ "$SHOW_DETAILED_CHANGES" = true ] && [ -n "${current_modules[0]}" ]; then
+                                        extract_resource_changes "$resource_template" "true" "${current_modules[0]}"
                                     fi
-                                fi
+                                done
                             fi
                             # Replaced resources
                             if [ -n "$first_replaced" ]; then
                                 echo "$first_replaced" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource_template; do
                                     resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
                                     echo -e "      ${PINK}{module}.${resource_suffix}${NC}"
-                                done
-                                # Show detailed changes if -d flag is set
-                                if [ "$SHOW_DETAILED_CHANGES" = true ] && [ -n "${current_modules[0]}" ]; then
-                                    first_resource=$(echo "$first_replaced" | tr ';' '\n' | grep -v '^$' | head -1)
-                                    if [ -n "$first_resource" ]; then
-                                        module_name=$(echo "${current_modules[0]}" | sed 's/\[/\\[/g; s/\]/\\]/g')
-                                        extract_resource_changes "$first_resource" "true" "$module_name"
+                                    # Show detailed changes if -d flag is set
+                                    if [ "$SHOW_DETAILED_CHANGES" = true ] && [ -n "${current_modules[0]}" ]; then
+                                        extract_resource_changes "$resource_template" "true" "${current_modules[0]}"
                                     fi
-                                fi
+                                done
                             fi
                             # Destroyed resources
                             if [ -n "$first_destroyed" ]; then
@@ -606,6 +609,10 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                             if [ -n "${current_created[0]}" ]; then
                                 echo "${current_created[0]}" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource; do
                                     echo -e "      ${GREEN}${resource}${NC}"
+                                    # Show detailed changes if -d flag is set
+                                    if [ "$SHOW_DETAILED_CHANGES" = true ]; then
+                                        extract_resource_changes "$resource" "false" ""
+                                    fi
                                 done
                             fi
                             if [ -n "${current_changed[0]}" ]; then
@@ -680,18 +687,30 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                         echo "$first_created" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource_template; do
                             resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
                             echo -e "      ${GREEN}{module}.${resource_suffix}${NC}"
+                            # Show detailed changes if -d flag is set
+                            if [ "$SHOW_DETAILED_CHANGES" = true ] && [ -n "${current_modules[0]}" ]; then
+                                extract_resource_changes "$resource_template" "true" "${current_modules[0]}"
+                            fi
                         done
                     fi
                     if [ -n "$first_changed" ]; then
                         echo "$first_changed" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource_template; do
                             resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
                             echo -e "      ${YELLOW}{module}.${resource_suffix}${NC}"
+                            # Show detailed changes if -d flag is set
+                            if [ "$SHOW_DETAILED_CHANGES" = true ] && [ -n "${current_modules[0]}" ]; then
+                                extract_resource_changes "$resource_template" "true" "${current_modules[0]}"
+                            fi
                         done
                     fi
                     if [ -n "$first_replaced" ]; then
                         echo "$first_replaced" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource_template; do
                             resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
                             echo -e "      ${MAGENTA}{module}.${resource_suffix}${NC}"
+                            # Show detailed changes if -d flag is set
+                            if [ "$SHOW_DETAILED_CHANGES" = true ] && [ -n "${current_modules[0]}" ]; then
+                                extract_resource_changes "$resource_template" "true" "${current_modules[0]}"
+                            fi
                         done
                     fi
                     if [ -n "$first_destroyed" ]; then
@@ -713,16 +732,25 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                     if [ -n "${current_created[0]}" ]; then
                         echo "${current_created[0]}" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource; do
                             echo -e "      ${GREEN}${resource}${NC}"
+                            if [ "$SHOW_DETAILED_CHANGES" = true ]; then
+                                extract_resource_changes "$resource" "false" ""
+                            fi
                         done
                     fi
                     if [ -n "${current_changed[0]}" ]; then
                         echo "${current_changed[0]}" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource; do
                             echo -e "      ${YELLOW}${resource}${NC}"
+                            if [ "$SHOW_DETAILED_CHANGES" = true ]; then
+                                extract_resource_changes "$resource" "false" ""
+                            fi
                         done
                     fi
                     if [ -n "${current_replaced[0]}" ]; then
                         echo "${current_replaced[0]}" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource; do
                             echo -e "      ${MAGENTA}${resource}${NC}"
+                            if [ "$SHOW_DETAILED_CHANGES" = true ]; then
+                                extract_resource_changes "$resource" "false" ""
+                            fi
                         done
                     fi
                     if [ -n "${current_destroyed[0]}" ]; then
@@ -746,4 +774,3 @@ fi
 echo ""
 echo -e "${BOLD}${CYAN}═══════════════════════════════════════════════════════════════${NC}"
 echo ""
-
