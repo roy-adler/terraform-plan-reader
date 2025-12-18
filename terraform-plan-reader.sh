@@ -560,6 +560,13 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                                     # Show once with placeholder notation
                                     echo -e "      ${GREEN}{module}.${resource_suffix}${NC}"
                                 done
+                                # Show detailed changes if -d flag is set
+                                if [ "$SHOW_DETAILED_CHANGES" = true ]; then
+                                    first_resource=$(echo "$first_created" | tr ';' '\n' | grep -v '^$' | head -1)
+                                    if [ -n "$first_resource" ] && [ -n "${current_modules[0]}" ]; then
+                                        extract_resource_changes "$first_resource" "true" "${current_modules[0]}"
+                                    fi
+                                fi
                             fi
                             # Changed resources
                             if [ -n "$first_changed" ]; then
@@ -612,6 +619,10 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                             if [ -n "${current_created[0]}" ]; then
                                 echo "${current_created[0]}" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource; do
                                     echo -e "      ${GREEN}${resource}${NC}"
+                                    # Show detailed changes if -d flag is set
+                                    if [ "$SHOW_DETAILED_CHANGES" = true ]; then
+                                        extract_resource_changes "$resource" "false" ""
+                                    fi
                                 done
                             fi
                             if [ -n "${current_changed[0]}" ]; then
@@ -687,6 +698,13 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                             resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
                             echo -e "      ${GREEN}{module}.${resource_suffix}${NC}"
                         done
+                        # Show detailed changes if -d flag is set
+                        if [ "$SHOW_DETAILED_CHANGES" = true ]; then
+                            first_resource=$(echo "$first_created" | tr ';' '\n' | grep -v '^$' | head -1)
+                            if [ -n "$first_resource" ] && [ -n "${current_modules[0]}" ]; then
+                                extract_resource_changes "$first_resource" "true" "${current_modules[0]}"
+                            fi
+                        fi
                     fi
                     if [ -n "$first_changed" ]; then
                         echo "$first_changed" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource_template; do
@@ -733,16 +751,25 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                     if [ -n "${current_created[0]}" ]; then
                         echo "${current_created[0]}" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource; do
                             echo -e "      ${GREEN}${resource}${NC}"
+                            if [ "$SHOW_DETAILED_CHANGES" = true ]; then
+                                extract_resource_changes "$resource" "false" ""
+                            fi
                         done
                     fi
                     if [ -n "${current_changed[0]}" ]; then
                         echo "${current_changed[0]}" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource; do
                             echo -e "      ${YELLOW}${resource}${NC}"
+                            if [ "$SHOW_DETAILED_CHANGES" = true ]; then
+                                extract_resource_changes "$resource" "false" ""
+                            fi
                         done
                     fi
                     if [ -n "${current_replaced[0]}" ]; then
                         echo "${current_replaced[0]}" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource; do
                             echo -e "      ${MAGENTA}${resource}${NC}"
+                            if [ "$SHOW_DETAILED_CHANGES" = true ]; then
+                                extract_resource_changes "$resource" "false" ""
+                            fi
                         done
                     fi
                     if [ -n "${current_destroyed[0]}" ]; then
