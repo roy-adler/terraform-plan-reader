@@ -568,9 +568,9 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                                     echo -e "      ${YELLOW}{module}.${resource_suffix}${NC}"
                                 done
                                 # Show detailed changes if -d flag is set (show once for the group using first resource as template)
-                                if [ "$SHOW_DETAILED_CHANGES" = true ] && [ -n "${current_modules[0]}" ]; then
+                                if [ "$SHOW_DETAILED_CHANGES" = true ]; then
                                     first_resource=$(echo "$first_changed" | tr ';' '\n' | grep -v '^$' | head -1)
-                                    if [ -n "$first_resource" ]; then
+                                    if [ -n "$first_resource" ] && [ -n "${current_modules[0]}" ]; then
                                         # Pass module name as-is (awk will use index() for literal matching)
                                         extract_resource_changes "$first_resource" "true" "${current_modules[0]}"
                                     fi
@@ -693,12 +693,26 @@ if [ "$GROUP_BY_MODULE" = true ]; then
                             resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
                             echo -e "      ${YELLOW}{module}.${resource_suffix}${NC}"
                         done
+                        # Show detailed changes if -d flag is set
+                        if [ "$SHOW_DETAILED_CHANGES" = true ]; then
+                            first_resource=$(echo "$first_changed" | tr ';' '\n' | grep -v '^$' | head -1)
+                            if [ -n "$first_resource" ] && [ -n "${current_modules[0]}" ]; then
+                                extract_resource_changes "$first_resource" "true" "${current_modules[0]}"
+                            fi
+                        fi
                     fi
                     if [ -n "$first_replaced" ]; then
                         echo "$first_replaced" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource_template; do
                             resource_suffix=$(echo "$resource_template" | sed "s|^module\.[^.]*\.||")
                             echo -e "      ${MAGENTA}{module}.${resource_suffix}${NC}"
                         done
+                        # Show detailed changes if -d flag is set
+                        if [ "$SHOW_DETAILED_CHANGES" = true ]; then
+                            first_resource=$(echo "$first_replaced" | tr ';' '\n' | grep -v '^$' | head -1)
+                            if [ -n "$first_resource" ] && [ -n "${current_modules[0]}" ]; then
+                                extract_resource_changes "$first_resource" "true" "${current_modules[0]}"
+                            fi
+                        fi
                     fi
                     if [ -n "$first_destroyed" ]; then
                         echo "$first_destroyed" | tr ';' '\n' | grep -v '^$' | while IFS= read -r resource_template; do
@@ -752,4 +766,3 @@ fi
 echo ""
 echo -e "${BOLD}${CYAN}═══════════════════════════════════════════════════════════════${NC}"
 echo ""
-
