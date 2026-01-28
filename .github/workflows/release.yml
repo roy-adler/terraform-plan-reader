@@ -31,7 +31,7 @@ jobs:
           shellcheck --severity=error --format=gcc "Terraform Plan Reader/terraform-plan-reader.sh"
       
       - name: Make script executable
-      run: chmod +x "Terraform Plan Reader/terraform-plan-reader.sh"
+        run: chmod +x "Terraform Plan Reader/terraform-plan-reader.sh"
       
       - name: Create Release
         uses: softprops/action-gh-release@v1
