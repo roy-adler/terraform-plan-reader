@@ -17,7 +17,7 @@ jobs:
       
       - name: Check syntax
         run: |
-          bash -n terraform-plan-reader.sh
+          bash -n "Terraform Plan Reader/terraform-plan-reader.sh"
           echo "✓ Syntax check passed"
       
       - name: Install ShellCheck
@@ -27,5 +27,5 @@ jobs:
       
       - name: Run ShellCheck
         run: |
-          shellcheck --severity=error --format=gcc terraform-plan-reader.sh
+          shellcheck --severity=error --format=gcc "Terraform Plan Reader/terraform-plan-reader.sh"
 

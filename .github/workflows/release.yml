@@ -18,7 +18,7 @@ jobs:
       
       - name: Validate script
         run: |
-          bash -n terraform-plan-reader.sh
+          bash -n "Terraform Plan Reader/terraform-plan-reader.sh"
           echo "✓ Syntax check passed"
       
       - name: Install ShellCheck
@@ -28,15 +28,15 @@ jobs:
       
       - name: Run ShellCheck
         run: |
-          shellcheck --severity=error --format=gcc terraform-plan-reader.sh
+          shellcheck --severity=error --format=gcc "Terraform Plan Reader/terraform-plan-reader.sh"
       
       - name: Make script executable
-        run: chmod +x terraform-plan-reader.sh
+      run: chmod +x "Terraform Plan Reader/terraform-plan-reader.sh"
       
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: terraform-plan-reader.sh
+          files: "Terraform Plan Reader/terraform-plan-reader.sh"
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
