@@ -14,6 +14,9 @@ if ($args.Count -gt 1) {
 
 $InputPath = $LogFile
 
+# Set to $true to strip leading ISO timestamps (e.g. 2026-01-26T16:13:09.7526386Z ) for readability
+$StripIsoTimestamp = $true
+
 $currentGroup = ""
 
 function Remove-AnsiEscapes {
@@ -24,8 +27,9 @@ function Remove-AnsiEscapes {
 function Format-TerragruntLine {
     param([string]$raw)
 
-    # Strip leading ISO timestamp (e.g. 2026-01-26T16:13:09.7526386Z )
-    $raw = $raw -replace '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s*', ''
+    if ($StripIsoTimestamp) {
+        $raw = $raw -replace '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s*', ''
+    }
 
     $clean = Remove-AnsiEscapes $raw
 
