@@ -12,6 +12,7 @@ pool:
 steps:
   - task: PowerShell@2
     inputs:
+      targetType: "filePath"
       filePath: "Terragrunt-Plan-Reader/terragrunt-plan-reader.ps1"
-      arguments: "Terragrunt-Plan-Reader/tg1.txt"
-    displayName: "Run Terragrunt Plan Reader with tg1.txt"
+      arguments: "tg1.txt" 
+      workingDirectory: "Terragrunt-Plan-Reader"
