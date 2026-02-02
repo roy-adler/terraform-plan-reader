@@ -15,7 +15,7 @@ if ($args.Count -gt 1) {
 $InputPath = $LogFile
 
 # Set to $true to strip leading ISO timestamps (e.g. 2026-01-26T16:13:09.7526386Z ) for readability
-$StripIsoTimestamp = $false
+$StripIsoTimestamp = $true
 
 $currentGroup = ""
 
