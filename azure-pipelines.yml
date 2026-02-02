@@ -4,14 +4,14 @@
 # https://aka.ms/yaml
 
 trigger:
-- main
+  - main
 
 pool:
   vmImage: ubuntu-latest
 
 steps:
-- task: PowerShell@2
-  inputs:
-    filePath: 'Terragrunt Plan Reader/terragrunt-plan-reader.ps1'
-    arguments: 'Terragrunt Plan Reader/tg1.txt'
-  displayName: 'Run Terragrunt Plan Reader with tg1.txt'
+  - task: PowerShell@2
+    inputs:
+      filePath: "Terragrunt Plan Reader/terragrunt-plan-reader.ps1"
+      arguments: "Terragrunt Plan Reader/tg1.txt"
+    displayName: "Run Terragrunt Plan Reader with tg1.txt"
