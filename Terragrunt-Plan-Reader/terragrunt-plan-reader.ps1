@@ -1,6 +1,6 @@
 # Terragrunt Plan Reader (PowerShell version)
 # Reads terragrunt/terraform log output and emits GitHub Actions ##[group] / ##[endgroup]
-# with bracketed stack prefix and "terraform:" prefix stripped for readability.
+# with leading timestamp, bracketed stack prefix, and "terraform:" prefix stripped for readability.
 
 param(
     [Parameter(Position = 0)]
@@ -23,6 +23,9 @@ function Remove-AnsiEscapes {
 
 function Format-TerragruntLine {
     param([string]$raw)
+
+    # Strip leading ISO timestamp (e.g. 2026-01-26T16:13:09.7526386Z )
+    $raw = $raw -replace '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s*', ''
 
     $clean = Remove-AnsiEscapes $raw
 
