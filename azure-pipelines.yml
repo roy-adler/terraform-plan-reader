@@ -1,8 +1,3 @@
-# Starter pipeline
-# Start with a minimal pipeline that you can customize to build and deploy your code.
-# Add steps that build, run tests, deploy, and more:
-# https://aka.ms/yaml
-
 trigger:
   - main
 
@@ -14,7 +9,7 @@ steps:
     displayName: "Run Terraform Plan Formatter"
     inputs:
       filePath: '$(System.DefaultWorkingDirectory)/terraform-plan-formatter/terraform-plan-formatter.ps1'
-      arguments: '$(System.DefaultWorkingDirectory)/terraform-plan-formatter/tf1.log'
+      arguments: '$(System.DefaultWorkingDirectory)/terraform-plan-formatter/tf2.log'
 
   - task: PowerShell@2
     displayName: "Run Terragrunt Plan Formatter"
