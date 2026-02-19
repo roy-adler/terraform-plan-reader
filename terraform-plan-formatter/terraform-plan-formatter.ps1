@@ -1,6 +1,9 @@
 # Terraform Plan Formatter (PowerShell version)
 # Reads Terraform plan log output and emits GitHub Actions ##[group] / ##[endgroup]
 # with leading timestamp and ANSI codes stripped for readability in CI.
+#
+# Structure: Terraform refresh/init and footer notes are foldable; the actual
+# plan (resource changes) is shown in full so you can focus on what matters.
 
 param(
     [Parameter(Position = 0)]
@@ -26,30 +29,72 @@ function Remove-AnsiEscapes {
     return $s
 }
 
-function Format-TerraformLine {
+function Get-CleanedLine {
     param([string]$raw)
-
     if ($StripIsoTimestamp) {
         $raw = $raw -replace '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s*', ''
     }
-
     $out = Remove-AnsiEscapes $raw
     # Strip "HH:MM:SS.mmm STDOUT " prefix (from Azure DevOps / script output)
     $out = $out -replace '^\d{1,2}:\d{2}:\d{2}\.\d+\s+STDOUT\s+', ''
-    Write-Host $out
+    return $out
 }
 
-Write-Host '##[group]Terraform Plan'
+# Section states: preamble (foldable), plan (visible), footer (foldable)
+$state = 'preamble'
+$pendingLines = [System.Collections.Generic.List[string]]::new()
+
+function Flush-Preamble {
+    if ($pendingLines.Count -gt 0) {
+        Write-Host '##[group]Terraform Refresh & Init'
+        foreach ($l in $pendingLines) { Write-Host $l }
+        Write-Host '##[endgroup]'
+        $pendingLines.Clear()
+    }
+}
+
+function Flush-Footer {
+    if ($pendingLines.Count -gt 0) {
+        Write-Host '##[group]Notes & Warnings'
+        foreach ($l in $pendingLines) { Write-Host $l }
+        Write-Host '##[endgroup]'
+        $pendingLines.Clear()
+    }
+}
+
+function Process-Line {
+    param([string]$raw)
+    $cleaned = Get-CleanedLine $raw
+
+    # Detect plan start (real changes section)
+    if ($cleaned -match 'Terraform used the selected providers|Terraform will perform the following actions') {
+        Flush-Preamble
+        $script:state = 'plan'
+    }
+
+    # Detect plan end (summary or no-changes)
+    if ($state -eq 'plan' -and ($cleaned -match 'Plan:.*(?:to add|to change|to destroy)' -or $cleaned -match 'No changes\. Your infrastructure')) {
+        Write-Host $cleaned
+        $script:state = 'footer'
+        return
+    }
+
+    switch ($state) {
+        'preamble' { [void]$pendingLines.Add($cleaned) }
+        'plan'    { Write-Host $cleaned }
+        'footer'  { [void]$pendingLines.Add($cleaned) }
+    }
+}
 
 if ($InputPath) {
     if (-not (Test-Path -LiteralPath $InputPath)) {
-        Write-Host '##[endgroup]'
         Write-Error "File not found: $InputPath"
         exit 1
     }
-    Get-Content -LiteralPath $InputPath | ForEach-Object { Format-TerraformLine $_ }
+    Get-Content -LiteralPath $InputPath | ForEach-Object { Process-Line $_ }
 } else {
-    $input | ForEach-Object { Format-TerraformLine $_ }
+    $input | ForEach-Object { Process-Line $_ }
 }
 
-Write-Host '##[endgroup]'
+Flush-Preamble
+Flush-Footer
