@@ -11,7 +11,7 @@ pool:
 
 steps:
   - task: PowerShell@2
+    displayName: "Run Terragrunt Plan Reader with tg1.log"
     inputs:
       filePath: '$(System.DefaultWorkingDirectory)/Terragrunt-Plan-Reader/terragrunt-plan-reader.ps1'
       arguments: '$(System.DefaultWorkingDirectory)/Terragrunt-Plan-Reader/tg1.log'
-      displayName: "Run Terragrunt Plan Reader with tg1.log"
