@@ -17,15 +17,15 @@ if ($args.Count -gt 1) {
 
 $InputPath = $LogFile
 
-# Set to $true to strip leading ISO timestamps (e.g. 2026-01-26T16:13:09.7526386Z ) for readability
+# Set to $true to strip leading ISO timestamps for readability
 $StripIsoTimestamp = $true
 
 function Remove-AnsiEscapes {
     param([string]$s)
     # Strip ESC [ ... m sequences (standard ANSI)
-    $s = $s -replace '\x1b\[[0-9;]*m', ''
+    $s = $s -replace ("`x1b" + '\[[\d;]*m'), ''
     # Strip [ ... m when stored as literal text (e.g. in pipeline logs)
-    $s = $s -replace '\[[0-9;]*m', ''
+    $s = $s -replace '\[[\d;]*m', ''
     return $s
 }
 
