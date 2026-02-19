@@ -96,5 +96,5 @@ if ($InputPath) {
     $input | ForEach-Object { Process-Line $_ }
 }
 
-Flush-Preamble
-Flush-Footer
+if ($state -eq 'preamble') { Flush-Preamble }
+elseif ($state -eq 'footer') { Flush-Footer }
