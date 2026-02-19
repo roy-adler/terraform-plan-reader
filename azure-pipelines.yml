@@ -19,5 +19,5 @@ steps:
   - task: PowerShell@2
     displayName: "Run Terragrunt Plan Formatter"
     inputs:
-      filePath: '$(System.DefaultWorkingDirectory)/terragrunt-plan-formatter/terragrunt-plan-reader.ps1'
+      filePath: '$(System.DefaultWorkingDirectory)/terragrunt-plan-formatter/terragrunt-plan-formatter.ps1'
       arguments: '$(System.DefaultWorkingDirectory)/terragrunt-plan-formatter/tg1.log'
