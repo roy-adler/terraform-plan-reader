@@ -25,7 +25,8 @@ function Remove-AnsiEscapes {
     # Strip ESC [ ... m sequences (standard ANSI)
     $s = $s -replace ("`x1b" + '\[[\d;]*m'), ''
     # Strip [ ... m when stored as literal text (e.g. in pipeline logs)
-    $s = $s -replace '\[[\d;]*m', ''
+    # Use \[? to also catch corrupted ESC (when 0x1B becomes '[') leaving stray [[31m
+    $s = $s -replace '\[?\[[\d;]*m', ''
     return $s
 }
 
