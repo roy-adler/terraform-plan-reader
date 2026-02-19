@@ -66,8 +66,8 @@ function Process-Line {
     param([string]$raw)
     $cleaned = Get-CleanedLine $raw
 
-    # Detect plan start (real changes section)
-    if ($cleaned -match 'Terraform used the selected providers|Terraform will perform the following actions') {
+    # Detect plan start (real changes section) - only when still in preamble
+    if ($state -eq 'preamble' -and ($cleaned -match 'Terraform used the selected providers|Terraform will perform the following actions')) {
         Flush-Preamble
         $script:state = 'plan'
     }
